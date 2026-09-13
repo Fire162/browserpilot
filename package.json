@@ -1,6 +1,6 @@
 {
   "name": "browserpilot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Control your local browser from a remote VPS AI Agent via Chrome Extension and Model Context Protocol (MCP)",
   "scripts": {
