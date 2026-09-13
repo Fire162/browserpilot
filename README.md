@@ -128,8 +128,46 @@ browserpilot/
    pnpm --filter browserpilot-mcp exec tsx test/test-bridge.ts
    ```
 
-> [!NOTE]
-> Ensure port `8765` is accessible on your VPS firewall (or exposed via Cloudflare Tunnel / reverse proxy).
+> [!TIP]
+> ### 🛡️ Opening Port `8765` on Your VPS Firewall
+> If the extension cannot connect to `ws://<your-vps-ip>:8765`, the port is likely blocked by your VPS firewall or cloud security group.
+>
+> <details open>
+> <summary><b>Click to view port-forwarding & firewall commands</b></summary>
+>
+> #### 1. Ubuntu / Debian (UFW)
+> ```bash
+> sudo ufw allow 8765/tcp comment "BrowserPilot WebSocket"
+> sudo ufw reload
+> sudo ufw status
+> ```
+>
+> #### 2. RHEL / CentOS / AlmaLinux / Rocky (firewalld)
+> ```bash
+> sudo firewall-cmd --permanent --add-port=8765/tcp
+> sudo firewall-cmd --reload
+> sudo firewall-cmd --list-ports
+> ```
+>
+> #### 3. Raw `iptables`
+> ```bash
+> sudo iptables -A INPUT -p tcp --dport 8765 -j ACCEPT
+> ```
+>
+> #### 4. Cloud Provider Security Groups (Oracle Cloud, AWS EC2, GCP, Hetzner, Azure)
+> In addition to the OS firewall, check your cloud provider's management console:
+> - **Protocol**: TCP
+> - **Port Range**: `8765`
+> - **Source**: `0.0.0.0/0` (or your local IP for tighter security)
+>
+> #### 5. Production Tip: Zero-Port Exposure via Cloudflare Tunnel (Recommended)
+> You can avoid exposing raw ports completely and get free HTTPS/WSS encryption by running a quick tunnel:
+> ```bash
+> cloudflared tunnel --url http://localhost:8765
+> ```
+> Then connect in the extension popup using: `wss://<your-tunnel-subdomain>.trycloudflare.com`
+> </details>
+
 
 ---
 
