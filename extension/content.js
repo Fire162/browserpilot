@@ -339,14 +339,30 @@
   // --- Utilities ---
   function findElementByText(text) {
     const clean = text.trim().toLowerCase();
-    const candidates = document.querySelectorAll(
+    const candidates = Array.from(document.querySelectorAll(
       'button, a, input[type=submit], input[type=button], [role="button"], span, div, p, h1, h2, h3, h4, h5, h6'
-    );
+    ));
 
+    // First pass: exact match, preferring elements with fewer child nodes (leaf elements)
+    const exactMatches = [];
     for (const el of candidates) {
       if (!isVisible(el)) continue;
       const content = (el.innerText || el.getAttribute('aria-label') || el.value || '').trim().toLowerCase();
-      if (content === clean || (content.includes(clean) && content.length < clean.length + 30)) {
+      if (content === clean) {
+        exactMatches.push(el);
+      }
+    }
+    if (exactMatches.length > 0) {
+      // Sort so elements with fewest children come first
+      exactMatches.sort((a, b) => a.childElementCount - b.childElementCount);
+      return exactMatches[0];
+    }
+
+    // Second pass: substring match
+    for (const el of candidates) {
+      if (!isVisible(el)) continue;
+      const content = (el.innerText || el.getAttribute('aria-label') || el.value || '').trim().toLowerCase();
+      if (content.includes(clean) && content.length < clean.length + 30) {
         return el;
       }
     }
