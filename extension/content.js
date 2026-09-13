@@ -237,51 +237,64 @@
 
   // --- 3. Type Into Element ---
   async function typeIntoElement({ selector, text, clear = false, pressEnter = false }) {
-    let el = document.querySelector(selector);
+    let el = selector ? document.querySelector(selector) : null;
+    if (!el && document.activeElement && (document.activeElement.isContentEditable || document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+      el = document.activeElement;
+    }
     if (!el) {
-      throw new Error(`Input element not found for selector: "${selector}"`);
+      el = document.querySelector('div[contenteditable="true"], [role="textbox"], textarea, input[type="text"]');
+    }
+    if (!el) {
+      throw new Error(`Input element not found for selector: "${selector || ''}"`);
     }
 
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     highlightElement(el, '#3b82f6'); // Blue highlight
     el.focus();
 
-    if (clear) {
-      el.value = '';
+    if (el.isContentEditable) {
+      if (clear) {
+        el.innerText = '';
+      }
+      document.execCommand('insertText', false, text);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else {
+      if (clear) {
+        el.value = '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+
+      // Set value and trigger native events
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value'
+      )?.set;
+      const nativeTextareaValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        'value'
+      )?.set;
+
+      if (el instanceof HTMLTextAreaElement && nativeTextareaValueSetter) {
+        nativeTextareaValueSetter.call(el, (el.value || '') + text);
+      } else if (el instanceof HTMLInputElement && nativeInputValueSetter) {
+        nativeInputValueSetter.call(el, (el.value || '') + text);
+      } else {
+        el.value = (el.value || '') + text;
+      }
+
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
-    // Set value and trigger native events
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype,
-      'value'
-    )?.set;
-    const nativeTextareaValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      'value'
-    )?.set;
-
-    if (el instanceof HTMLTextAreaElement && nativeTextareaValueSetter) {
-      nativeTextareaValueSetter.call(el, (el.value || '') + text);
-    } else if (el instanceof HTMLInputElement && nativeInputValueSetter) {
-      nativeInputValueSetter.call(el, (el.value || '') + text);
-    } else {
-      el.value = (el.value || '') + text;
-    }
-
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-
     if (pressEnter) {
       dispatchKeyEvent(el, 'Enter');
-      // If element is inside a form and enter is pressed, submit form
       if (el.form) {
         el.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       }
     }
 
-    return { value: el.value };
+    return { value: el.isContentEditable ? el.innerText : el.value };
   }
 
   // --- 4. Press Key ---
