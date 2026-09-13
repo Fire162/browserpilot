@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-09-14 01:20 IST
+
+### Added
+* `browser_run_code`: Agent code execution capability in the browser's context.
+* `browser_get_cookies`: Live cookie and active session extraction for tab domains.
+* `browser_upload_file`: Direct file upload automation to file inputs via base64 encoding.
+* `browser_label_elements`: Visual OmniParser mode labeling interactive elements with numbered badges.
+* `skills/browserpilot/SKILL.md`: Production AI agent skill with verification test prompt.
+* `TROUBLESHOOTING.md`: Detailed troubleshooting runbook covering 8 real-world deployment challenges.
+* Creator quote by Abhinav Maurya in `README.md`.
+
+### Changed
+* Updated `browser_click` to support direct clicks by numeric visual element `label`.
+
 ## [1.0.0] - 2026-09-13 23:46 IST
 
 ### Added
