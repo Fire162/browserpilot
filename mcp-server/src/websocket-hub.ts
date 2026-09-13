@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { IncomingMessage } from 'http';
+import { IncomingMessage, Server as HttpServer } from 'http';
 import { URL } from 'url';
 import { BrowserActionType, CommandRequest, CommandResponse, WebSocketInboundMessage } from './types.js';
 
@@ -18,9 +18,26 @@ export class WebSocketHub {
   private lastSeen: number = 0;
   private requestCounter: number = 0;
 
-  constructor(port: number = 8765, secretToken: string = 'browserpilot-secret') {
+  constructor(port: number = 8770, secretToken: string = 'browserpilot-secret') {
     this.port = port;
     this.secretToken = secretToken;
+  }
+
+  public attachToServer(server: HttpServer): void {
+    this.wss = new WebSocketServer({
+      server,
+      verifyClient: (info, callback) => {
+        const isAuthorized = this.authenticate(info.req);
+        if (!isAuthorized) {
+          console.error('[WebSocketHub] Unauthorized connection attempt rejected.');
+          callback(false, 401, 'Unauthorized');
+          return;
+        }
+        callback(true);
+      }
+    });
+
+    this.setupSocketHandlers();
   }
 
   public start(): Promise<void> {
@@ -49,56 +66,60 @@ export class WebSocketHub {
           reject(err);
         });
 
-        this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-          console.error('[WebSocketHub] Chrome Extension connected successfully!');
-          
-          // Replace active client if previously connected
-          if (this.activeClient && this.activeClient !== ws && this.activeClient.readyState === WebSocket.OPEN) {
-            this.activeClient.close(1000, 'Replaced by new connection');
-          }
-          
-          this.activeClient = ws;
-          this.lastSeen = Date.now();
-
-          // Send welcome handshake
-          ws.send(JSON.stringify({
-            type: 'auth_success',
-            server: 'browserpilot-mcp',
-            timestamp: Date.now()
-          }));
-
-          ws.on('message', (data: Buffer | string) => {
-            this.lastSeen = Date.now();
-            try {
-              const msg: WebSocketInboundMessage = JSON.parse(data.toString());
-              this.handleInboundMessage(msg);
-            } catch (e) {
-              console.error('[WebSocketHub] Failed to parse incoming message:', e);
-            }
-          });
-
-          ws.on('close', (code, reason) => {
-            console.error(`[WebSocketHub] Extension disconnected (code: ${code}, reason: ${reason})`);
-            if (this.activeClient === ws) {
-              this.activeClient = null;
-            }
-            // Reject any pending requests that were awaiting response
-            for (const [id, req] of this.pendingRequests.entries()) {
-              clearTimeout(req.timer);
-              req.reject(new Error('Extension disconnected before command response was received'));
-              this.pendingRequests.delete(id);
-            }
-          });
-
-          ws.on('error', (err) => {
-            console.error('[WebSocketHub] Client socket error:', err);
-          });
-        });
+        this.setupSocketHandlers();
       } catch (err) {
         reject(err);
       }
     });
   }
+
+  private setupSocketHandlers(): void {
+    if (!this.wss) return;
+
+    this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+      console.error('[WebSocketHub] Chrome Extension connected successfully!');
+      
+      if (this.activeClient && this.activeClient !== ws && this.activeClient.readyState === WebSocket.OPEN) {
+        this.activeClient.close(1000, 'Replaced by new connection');
+      }
+      
+      this.activeClient = ws;
+      this.lastSeen = Date.now();
+
+      ws.send(JSON.stringify({
+        type: 'auth_success',
+        server: 'browserpilot-mcp',
+        timestamp: Date.now()
+      }));
+
+      ws.on('message', (data: Buffer | string) => {
+        this.lastSeen = Date.now();
+        try {
+          const msg: WebSocketInboundMessage = JSON.parse(data.toString());
+          this.handleInboundMessage(msg);
+        } catch (e) {
+          console.error('[WebSocketHub] Failed to parse incoming message:', e);
+        }
+      });
+
+      ws.on('close', (code, reason) => {
+        console.error(`[WebSocketHub] Extension disconnected (code: ${code}, reason: ${reason})`);
+        if (this.activeClient === ws) {
+          this.activeClient = null;
+        }
+        for (const [id, req] of this.pendingRequests.entries()) {
+          clearTimeout(req.timer);
+          req.reject(new Error('Extension disconnected before command response was received'));
+          this.pendingRequests.delete(id);
+        }
+      });
+
+      ws.on('error', (err) => {
+        console.error('[WebSocketHub] Client socket error:', err);
+      });
+    });
+  }
+
 
   private authenticate(req: IncomingMessage): boolean {
     if (!this.secretToken) return true;
