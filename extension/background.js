@@ -104,14 +104,18 @@ async function handleCommand(action, params = {}) {
       return switchTab(params);
     case 'close_tab':
       return closeTab(params);
+    case 'reload_extension':
+      setTimeout(() => chrome.runtime.reload(), 100);
+      return { ok: true, message: 'Reloading extension...' };
     case 'screenshot':
       return captureScreenshot(params);
+    case 'evaluate':
+      return evaluateWithScripting(params);
     case 'read_page':
     case 'click':
     case 'type':
     case 'press_key':
     case 'scroll':
-    case 'evaluate':
       return executeInTab(action, params);
     default:
       throw new Error(`Unsupported action: ${action}`);
@@ -192,15 +196,26 @@ async function closeTab({ tabId }) {
 }
 
 async function captureScreenshot({ tabId }) {
-  const targetTab = tabId ? await chrome.tabs.get(tabId) : await getActiveTab();
-  if (tabId && !targetTab.active) {
+  const currentTab = await getActiveTab().catch(() => null);
+  const targetTab = tabId ? await chrome.tabs.get(tabId) : currentTab;
+
+  let switchedTab = false;
+  if (tabId && currentTab && currentTab.id !== tabId) {
     await chrome.tabs.update(tabId, { active: true });
-    await new Promise((r) => setTimeout(r, 200));
+    switchedTab = true;
+    await new Promise((r) => setTimeout(r, 150));
   }
 
-  const dataUrl = await chrome.tabs.captureVisibleTab(targetTab.windowId, {
-    format: 'png'
-  });
+  let dataUrl;
+  try {
+    dataUrl = await chrome.tabs.captureVisibleTab(targetTab.windowId, {
+      format: 'png'
+    });
+  } finally {
+    if (switchedTab && currentTab && currentTab.id) {
+      await chrome.tabs.update(currentTab.id, { active: true }).catch(() => {});
+    }
+  }
 
   return {
     tabId: targetTab.id,
@@ -239,6 +254,37 @@ async function executeInTab(action, params = {}) {
       }
     );
   });
+}
+
+async function evaluateWithScripting(params = {}) {
+  const targetTab = params.tabId ? await chrome.tabs.get(params.tabId) : await getActiveTab();
+  if (!targetTab || !targetTab.id) {
+    throw new Error('No target browser tab found');
+  }
+
+  const scriptCode = params.script;
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: targetTab.id },
+    world: 'MAIN',
+    func: (code) => {
+      try {
+        return window.eval(code);
+      } catch (err) {
+        return { __eval_error: err.message || String(err) };
+      }
+    },
+    args: [scriptCode]
+  });
+
+  if (!results || !results[0]) {
+    return null;
+  }
+
+  const res = results[0].result;
+  if (res && res.__eval_error) {
+    throw new Error(res.__eval_error);
+  }
+  return res;
 }
 
 // Helpers
