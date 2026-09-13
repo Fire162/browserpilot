@@ -333,12 +333,10 @@ async function getCookiesForTab(params = {}) {
     throw new Error('No target browser tab or URL found');
   }
 
-  const urlObj = new URL(targetTab.url);
-  const cookies = await chrome.cookies.getAll({ domain: urlObj.hostname });
+  const cookies = await chrome.cookies.getAll({ url: targetTab.url });
 
   return {
     url: targetTab.url,
-    domain: urlObj.hostname,
     count: cookies.length,
     cookies: cookies.map((c) => ({
       name: c.name,
