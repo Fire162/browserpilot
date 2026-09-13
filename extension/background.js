@@ -37,6 +37,9 @@ chrome.runtime.onStartup.addListener(() => {
   setupOffscreenDocument();
 });
 
+// Run setup immediately on service worker initialization
+setupOffscreenDocument();
+
 // Update extension badge on status change
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'CONNECTION_STATUS_UPDATE') {
