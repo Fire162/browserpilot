@@ -181,12 +181,23 @@
   }
 
   // --- 2. Click Element ---
-  async function clickElement({ selector, text }) {
+  async function clickElement({ selector, text, x, y, index }) {
     let el = null;
 
-    if (selector) {
+    if (typeof x === 'number' && typeof y === 'number') {
+      el = document.elementFromPoint(x, y);
+    }
+
+    if (!el && selector) {
       try {
-        el = document.querySelector(selector);
+        const matches = document.querySelectorAll(selector);
+        if (matches.length > 0) {
+          if (typeof index === 'number') {
+            el = index < 0 ? matches[matches.length + index] : matches[index];
+          } else {
+            el = matches[0];
+          }
+        }
       } catch (e) {
         // Invalid selector syntax, fall through to text match
       }

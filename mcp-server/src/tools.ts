@@ -200,18 +200,21 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
     {
       selector: z.string().optional().describe("CSS selector for the element (e.g. 'button.btn-primary', '#login-btn', 'a.nav-link')"),
       text: z.string().optional().describe("Text content inside the element to match and click (e.g. 'Log In', 'Submit', 'Next')"),
+      x: z.number().optional().describe('X coordinate on the viewport to click'),
+      y: z.number().optional().describe('Y coordinate on the viewport to click'),
+      index: z.number().optional().describe('If selector matches multiple elements, which index to click (0-based, or -1 for last)'),
       tabId: z.number().optional().describe('Target tab ID')
     },
-    async ({ selector, text, tabId }) => {
-      if (!selector && !text) {
+    async ({ selector, text, x, y, index, tabId }) => {
+      if (!selector && !text && typeof x !== 'number') {
         return {
           isError: true,
-          content: [{ type: 'text', text: 'Either `selector` or `text` must be provided to locate the element.' }]
+          content: [{ type: 'text', text: 'Either `selector`, `text`, or `x`/`y` coordinates must be provided.' }]
         };
       }
 
       try {
-        const result = await hub.dispatch('click', { selector, text, tabId }, 20000);
+        const result = await hub.dispatch('click', { selector, text, x, y, index, tabId }, 20000);
         return {
           content: [
             {
