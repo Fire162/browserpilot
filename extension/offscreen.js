@@ -2,17 +2,20 @@ let socket = null;
 let heartbeatTimer = null;
 let reconnectTimer = null;
 let isExplicitlyDisconnected = false;
+let currentWsUrl = '';
+let currentToken = '';
 
 console.log('[BrowserPilot Offscreen] Offscreen document initialized.');
 
-// Load initial config and auto-connect if enabled
-chrome.storage.local.get(['wsUrl', 'secretToken', 'autoConnect'], (data) => {
-  if (data.autoConnect !== false && data.wsUrl) {
-    connect(data.wsUrl, data.secretToken || '');
-  }
-});
+// Signal background service worker that offscreen document is ready
+chrome.runtime.sendMessage({ type: 'OFFSCREEN_DOCUMENT_READY' }).catch(() => {});
 
 function connect(rawUrl, token) {
+  if (!rawUrl) return;
+
+  currentWsUrl = rawUrl;
+  currentToken = token || '';
+
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     console.log('[BrowserPilot Offscreen] Socket already open or connecting.');
     return;
@@ -73,7 +76,6 @@ function connect(rawUrl, token) {
 
         if (msg.action) {
           console.log('[BrowserPilot Offscreen] Received action from VPS:', msg.action, msg.params);
-          // Delegate command execution to background service worker
           chrome.runtime.sendMessage(
             { type: 'EXECUTE_COMMAND', command: msg },
             (response) => {
@@ -143,11 +145,16 @@ function scheduleReconnect() {
   console.log('[BrowserPilot Offscreen] Scheduling reconnect in 5 seconds...');
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    chrome.storage.local.get(['wsUrl', 'secretToken', 'autoConnect'], (data) => {
-      if (data.autoConnect !== false && data.wsUrl && !isExplicitlyDisconnected) {
-        connect(data.wsUrl, data.secretToken || '');
-      }
-    });
+    if (!isExplicitlyDisconnected && currentWsUrl) {
+      // Request latest config from background worker
+      chrome.runtime.sendMessage({ type: 'GET_CONNECTION_CONFIG' }, (response) => {
+        if (response && response.autoConnect !== false && response.wsUrl) {
+          connect(response.wsUrl, response.secretToken || '');
+        } else if (currentWsUrl) {
+          connect(currentWsUrl, currentToken);
+        }
+      });
+    }
   }, 5000);
 }
 
@@ -181,13 +188,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'CONNECT_WEBSOCKET') {
     connect(request.wsUrl, request.secretToken);
     sendResponse({ ok: true });
-    return true;
+    return false;
   }
 
   if (request.type === 'DISCONNECT_WEBSOCKET') {
     disconnect();
     sendResponse({ ok: true });
-    return true;
+    return false;
   }
 
   if (request.type === 'GET_SOCKET_STATUS') {
@@ -197,6 +204,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       status: isConnected ? 'connected' : (isConnecting ? 'connecting' : 'disconnected'),
       readyState: socket ? socket.readyState : -1
     });
-    return true;
+    return false;
   }
 });

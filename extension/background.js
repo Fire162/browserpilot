@@ -38,7 +38,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 // Update extension badge on status change
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'CONNECTION_STATUS_UPDATE') {
     if (msg.status === 'connected') {
       chrome.action.setBadgeText({ text: 'ON' });
@@ -50,6 +50,27 @@ chrome.runtime.onMessage.addListener((msg) => {
       chrome.action.setBadgeText({ text: 'OFF' });
       chrome.action.setBadgeBackgroundColor({ color: '#ef4444' }); // Red
     }
+    return false;
+  }
+
+  if (msg.type === 'OFFSCREEN_DOCUMENT_READY') {
+    chrome.storage.local.get(['wsUrl', 'secretToken', 'autoConnect'], (data) => {
+      if (data.autoConnect !== false && data.wsUrl) {
+        chrome.runtime.sendMessage({
+          type: 'CONNECT_WEBSOCKET',
+          wsUrl: data.wsUrl,
+          secretToken: data.secretToken || ''
+        }).catch(() => {});
+      }
+    });
+    return false;
+  }
+
+  if (msg.type === 'GET_CONNECTION_CONFIG') {
+    chrome.storage.local.get(['wsUrl', 'secretToken', 'autoConnect'], (data) => {
+      sendResponse(data);
+    });
+    return true; // async sendResponse
   }
 });
 

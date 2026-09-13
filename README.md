@@ -129,44 +129,69 @@ browserpilot/
    ```
 
 > [!TIP]
-> ### 🛡️ Opening Port `8765` on Your VPS Firewall
-> If the extension cannot connect to `ws://<your-vps-ip>:8765`, the port is likely blocked by your VPS firewall or cloud security group.
+> ### 🌐 Best Practice: Zero-Config Deployment with Fire PM Tunnels
+> Instead of manually opening firewall ports or wrestling with SSL certificates, you can supervise BrowserPilot 24/7 and expose an encrypted **HTTPS / WSS** tunnel using [**Fire PM**](https://github.com/Fire-Package/fire-pm) — the native Linux process supervisor & tunnel ecosystem.
 >
 > <details open>
-> <summary><b>Click to view port-forwarding & firewall commands</b></summary>
+> <summary><b>Click to view Fire PM Setup Guide</b></summary>
+>
+> 1. **Install Fire PM** (if not already installed):
+>    Visit the [Fire PM Repository](https://github.com/Fire-Package/fire-pm) or run the installer:
+>    ```bash
+>    git clone https://github.com/Fire-Package/fire-pm.git /root/fire-pm
+>    cd /root/fire-pm && sudo ./install.sh
+>    ```
+>
+> 2. **Start BrowserPilot as a Persistent System Service**:
+>    ```bash
+>    fire start /root/browserpilot/mcp-server/dist/index.js --name browserpilot --env WS_PORT=8770 --env SECRET_TOKEN=my-secure-token
+>    ```
+>
+> 3. **Open a Public Secure Tunnel (Automatic SSL/WSS)**:
+>    ```bash
+>    fire tunnel open 8770
+>    # Output: ✔ Custom Tunnel established for localhost:8770
+>    #         🔗 URL: https://<hash>-tunnel.yourdomain.com
+>    ```
+>
+> 4. **Connect from Chrome Extension**:
+>    In the extension popup, enter:
+>    - **VPS WebSocket Endpoint**: `wss://<hash>-tunnel.yourdomain.com`
+>    - **Secret Token**: `my-secure-token`
+>
+> 5. **Manage Your Tunnel & Service**:
+>    ```bash
+>    fire list              # View service health and memory usage
+>    fire tunnel list       # View active tunnels and uptime
+>    fire logs browserpilot # Tail live service logs
+>    ```
+> </details>
+
+> [!NOTE]
+> ### 🛡️ Manual Firewall Configuration (Alternative)
+> If you are not using Fire PM tunnels and are connecting directly over raw TCP, make sure port `8770` (or your custom `WS_PORT`) is open:
+>
+> <details>
+> <summary><b>Click to view manual firewall commands</b></summary>
 >
 > #### 1. Ubuntu / Debian (UFW)
 > ```bash
-> sudo ufw allow 8765/tcp comment "BrowserPilot WebSocket"
+> sudo ufw allow 8770/tcp comment "BrowserPilot WebSocket"
 > sudo ufw reload
-> sudo ufw status
 > ```
 >
 > #### 2. RHEL / CentOS / AlmaLinux / Rocky (firewalld)
 > ```bash
-> sudo firewall-cmd --permanent --add-port=8765/tcp
+> sudo firewall-cmd --permanent --add-port=8770/tcp
 > sudo firewall-cmd --reload
-> sudo firewall-cmd --list-ports
 > ```
 >
 > #### 3. Raw `iptables`
 > ```bash
-> sudo iptables -A INPUT -p tcp --dport 8765 -j ACCEPT
+> sudo iptables -A INPUT -p tcp --dport 8770 -j ACCEPT
 > ```
->
-> #### 4. Cloud Provider Security Groups (Oracle Cloud, AWS EC2, GCP, Hetzner, Azure)
-> In addition to the OS firewall, check your cloud provider's management console:
-> - **Protocol**: TCP
-> - **Port Range**: `8765`
-> - **Source**: `0.0.0.0/0` (or your local IP for tighter security)
->
-> #### 5. Production Tip: Zero-Port Exposure via Cloudflare Tunnel (Recommended)
-> You can avoid exposing raw ports completely and get free HTTPS/WSS encryption by running a quick tunnel:
-> ```bash
-> cloudflared tunnel --url http://localhost:8765
-> ```
-> Then connect in the extension popup using: `wss://<your-tunnel-subdomain>.trycloudflare.com`
 > </details>
+
 
 
 ---

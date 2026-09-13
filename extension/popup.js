@@ -67,6 +67,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Disconnect
       btnToggleConnection.disabled = true;
       chrome.runtime.sendMessage({ type: 'DISCONNECT_WEBSOCKET' }, () => {
+        if (chrome.runtime.lastError) { /* ignore */ }
         btnToggleConnection.disabled = false;
         updateUIStatus('disconnected', 'Disconnected by user');
       });
@@ -75,6 +76,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       btnToggleConnection.disabled = true;
       updateUIStatus('connecting', 'Connecting...');
       chrome.runtime.sendMessage({ type: 'CONNECT_WEBSOCKET', wsUrl, secretToken }, () => {
+        if (chrome.runtime.lastError) { /* ignore */ }
         btnToggleConnection.disabled = false;
       });
     }
