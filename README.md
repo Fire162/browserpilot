@@ -23,6 +23,13 @@
   <a href="skills/browserpilot/SKILL.md">🤖 AI Agent Skill</a>
 </p>
 
+<blockquote>
+  <p align="center">
+    <i>"BrowserPilot is only as intelligent as the AI agent driving it."</i><br>
+    — <b>Abhinav Maurya</b>
+  </p>
+</blockquote>
+
 </div>
 
 ---
