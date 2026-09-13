@@ -109,8 +109,14 @@ async function handleCommand(action, params = {}) {
       return { ok: true, message: 'Reloading extension...' };
     case 'screenshot':
       return captureScreenshot(params);
+    case 'run_code':
+      return runCodeInTab(params);
+    case 'get_cookies':
+      return getCookiesForTab(params);
     case 'evaluate':
       return evaluateWithScripting(params);
+    case 'upload_file':
+    case 'label_elements':
     case 'read_page':
     case 'click':
     case 'type':
@@ -285,6 +291,66 @@ async function evaluateWithScripting(params = {}) {
     throw new Error(res.__eval_error);
   }
   return res;
+}
+
+async function runCodeInTab(params = {}) {
+  const targetTab = params.tabId ? await chrome.tabs.get(params.tabId) : await getActiveTab();
+  if (!targetTab || !targetTab.id) {
+    throw new Error('No target browser tab found');
+  }
+
+  const userCode = params.code || '';
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: targetTab.id },
+    world: 'ISOLATED', // Extension isolated world: full DOM access, immune to website CSP
+    func: async (code) => {
+      try {
+        const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+        const fn = new AsyncFunction(code);
+        const res = await fn();
+        return { __success: true, value: res };
+      } catch (err) {
+        return { __success: false, error: err.message || String(err), stack: err.stack };
+      }
+    },
+    args: [userCode]
+  });
+
+  if (!results || !results[0]) {
+    return { ok: false, error: 'No execution result returned' };
+  }
+
+  const outcome = results[0].result;
+  if (outcome && !outcome.__success) {
+    throw new Error(`Script Execution Error: ${outcome.error}`);
+  }
+  return outcome ? outcome.value : null;
+}
+
+async function getCookiesForTab(params = {}) {
+  const targetTab = params.tabId ? await chrome.tabs.get(params.tabId) : await getActiveTab();
+  if (!targetTab || !targetTab.url) {
+    throw new Error('No target browser tab or URL found');
+  }
+
+  const urlObj = new URL(targetTab.url);
+  const cookies = await chrome.cookies.getAll({ domain: urlObj.hostname });
+
+  return {
+    url: targetTab.url,
+    domain: urlObj.hostname,
+    count: cookies.length,
+    cookies: cookies.map((c) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path,
+      secure: c.secure,
+      httpOnly: c.httpOnly,
+      sameSite: c.sameSite,
+      expirationDate: c.expirationDate
+    }))
+  };
 }
 
 // Helpers

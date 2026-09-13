@@ -91,7 +91,7 @@ sequenceDiagram
 
 ## 🛠️ MCP Tools Reference
 
-BrowserPilot exposes 12 specialized tools directly to any MCP-compatible AI agent:
+BrowserPilot exposes 16 specialized tools directly to any MCP-compatible AI agent:
 
 | MCP Tool | Description | Key Parameters |
 | :--- | :--- | :--- |
@@ -101,12 +101,16 @@ BrowserPilot exposes 12 specialized tools directly to any MCP-compatible AI agen
 | `browser_switch_tab`| Switches focus and brings a specific tab to the foreground. | `tabId` |
 | `browser_close_tab` | Closes a specific tab. | `tabId?` |
 | `browser_read_page` | Extracts readable text, clean markdown, or interactive element catalog. | `format?` (`markdown`, `interactive_elements`, `text`, `html`), `maxLength?`, `tabId?` |
-| `browser_click` | Clicks an element by CSS selector or human-readable text label. | `selector?`, `text?`, `tabId?` |
+| `browser_click` | Clicks an element by selector, text, numeric badge label, or x/y coordinates. | `selector?`, `text?`, `label?`, `x?`, `y?`, `tabId?` |
 | `browser_type` | Types into an input/textarea with realistic input events. | `selector`, `text`, `clear?`, `pressEnter?` |
 | `browser_press_key`| Dispatches keyboard events (`Enter`, `Escape`, `Tab`, `ArrowDown`). | `key`, `tabId?` |
 | `browser_scroll` | Scrolls the page in any direction or scrolls an element into view. | `direction?` (`up`, `down`, `top`, `bottom`), `amount?`, `selector?` |
-| `browser_take_screenshot` | Captures the active viewport and returns base64 image data to the agent. | `tabId?` |
-| `browser_evaluate`| Runs custom JavaScript expression in the page and returns the result. | `script`, `tabId?` |
+| `browser_take_screenshot` | Captures the active viewport (preserves user active tab). | `tabId?` |
+| `browser_evaluate`| Runs custom JavaScript in page context. | `script`, `tabId?` |
+| `browser_run_code`| 🚀 **Agent Code Interpreter**: Executes async JavaScript with elevated privileges (bypasses website CSP). | `code`, `tabId?` |
+| `browser_get_cookies`| 🍪 Extracts active cookies & session tokens for current domain. | `tabId?` |
+| `browser_upload_file`| 📁 Directly populates `<input type="file">` with base64 data. | `base64Data`, `filename`, `mimeType?`, `selector?`, `tabId?` |
+| `browser_label_elements`| 🎯 Numbers all interactive elements on screen (OmniParser mode). | `remove?`, `tabId?` |
 
 ---
 

@@ -42,6 +42,10 @@ All tools are registered under the MCP server name `browserpilot`:
 | `browser_scroll` | Scroll page/element | Use `direction: "down"` or pass element `selector`. |
 | `browser_take_screenshot` | Capture visual viewport | Automatically preserves user active tab during background execution. |
 | `browser_evaluate` | Run JavaScript expression | Evaluates in extension world; avoid `eval()` on strict CSP pages. |
+| `browser_run_code` | 🚀 **Direct Code Execution** | Write & run async JS with full DOM access, immune to website CSP restrictions. |
+| `browser_get_cookies` | 🍪 Extract active cookies | Retrieve session credentials and auth cookies for the current domain. |
+| `browser_upload_file` | 📁 File upload automation | Upload files into `<input type="file">` elements using base64 data. |
+| `browser_label_elements`| 🎯 OmniParser element labeling | Injects visual numbered badges `[1]`, `[2]` and click with `browser_click({ label: N })`. |
 
 ---
 

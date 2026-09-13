@@ -203,18 +203,19 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       x: z.number().optional().describe('X coordinate on the viewport to click'),
       y: z.number().optional().describe('Y coordinate on the viewport to click'),
       index: z.number().optional().describe('If selector matches multiple elements, which index to click (0-based, or -1 for last)'),
+      label: z.number().optional().describe('Numeric badge label from browser_label_elements to click (e.g. 1, 2, 3)'),
       tabId: z.number().optional().describe('Target tab ID')
     },
-    async ({ selector, text, x, y, index, tabId }) => {
-      if (!selector && !text && typeof x !== 'number') {
+    async ({ selector, text, x, y, index, label, tabId }) => {
+      if (!selector && !text && typeof x !== 'number' && typeof label !== 'number') {
         return {
           isError: true,
-          content: [{ type: 'text', text: 'Either `selector`, `text`, or `x`/`y` coordinates must be provided.' }]
+          content: [{ type: 'text', text: 'Either `selector`, `text`, `label`, or `x`/`y` coordinates must be provided.' }]
         };
       }
 
       try {
-        const result = await hub.dispatch('click', { selector, text, x, y, index, tabId }, 20000);
+        const result = await hub.dispatch('click', { selector, text, x, y, index, label, tabId }, 20000);
         return {
           content: [
             {
@@ -400,6 +401,125 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to evaluate script: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // 13. browser_run_code
+  server.tool(
+    'browser_run_code',
+    'Execute arbitrary async JavaScript code inside the browser tab context with elevated permissions (immune to page CSP) and return the output.',
+    {
+      code: z.string().describe("JavaScript code to execute. Can use 'await', DOM APIs (document, window), and return values/objects directly."),
+      tabId: z.number().optional().describe('Target tab ID')
+    },
+    async ({ code, tabId }) => {
+      try {
+        const result = await hub.dispatch('run_code', { code, tabId }, 30000);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result ?? 'undefined')
+            }
+          ]
+        };
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to run code: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // 14. browser_get_cookies
+  server.tool(
+    'browser_get_cookies',
+    'Extract active cookies and session credentials for the current tab URL / domain.',
+    {
+      tabId: z.number().optional().describe('Target tab ID')
+    },
+    async ({ tabId }) => {
+      try {
+        const result = await hub.dispatch('get_cookies', { tabId }, 15000);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2)
+            }
+          ]
+        };
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to get cookies: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // 15. browser_upload_file
+  server.tool(
+    'browser_upload_file',
+    'Upload a file directly into a file input (<input type="file">) on the page using base64 encoded data.',
+    {
+      base64Data: z.string().describe('Base64 encoded file content'),
+      filename: z.string().describe('File name including extension (e.g. resume.pdf, photo.jpg)'),
+      mimeType: z.string().optional().describe("MIME type of the file (e.g. 'image/jpeg', 'application/pdf', default 'application/octet-stream')"),
+      selector: z.string().optional().describe("CSS selector for the file input element (default 'input[type=\"file\"]')"),
+      tabId: z.number().optional().describe('Target tab ID')
+    },
+    async ({ base64Data, filename, mimeType = 'application/octet-stream', selector, tabId }) => {
+      try {
+        const result = await hub.dispatch('upload_file', { base64Data, filename, mimeType, selector, tabId }, 25000);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✅ File "${filename}" (${result.size} bytes) uploaded successfully into "${result.selector}".`
+            }
+          ]
+        };
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to upload file: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // 16. browser_label_elements
+  server.tool(
+    'browser_label_elements',
+    'Add visual numbered badges to all interactive elements on the page (OmniParser mode) or remove them.',
+    {
+      remove: z.boolean().optional().describe('Set to true to remove all existing visual label badges from the page'),
+      tabId: z.number().optional().describe('Target tab ID')
+    },
+    async ({ remove = false, tabId }) => {
+      try {
+        const result = await hub.dispatch('label_elements', { remove, tabId }, 20000);
+        if (remove) {
+          return {
+            content: [{ type: 'text', text: '✅ All visual element labels removed.' }]
+          };
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `✅ Labeled ${result.count} interactive element(s) with visual badges [1] through [${result.count}]. Use browser_click({ label: number }) to click any of them directly.\n\nFirst elements:\n${JSON.stringify(result.labels.slice(0, 30), null, 2)}`
+            }
+          ]
+        };
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to label elements: ${err.message}` }]
         };
       }
     }

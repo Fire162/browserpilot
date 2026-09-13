@@ -30,6 +30,10 @@
         return pressKey(params);
       case 'scroll':
         return scrollPage(params);
+      case 'upload_file':
+        return uploadFileToInput(params);
+      case 'label_elements':
+        return labelInteractiveElements(params);
       case 'evaluate':
         return evaluateScript(params);
       default:
@@ -181,10 +185,14 @@
   }
 
   // --- 2. Click Element ---
-  async function clickElement({ selector, text, x, y, index }) {
+  async function clickElement({ selector, text, x, y, index, label }) {
     let el = null;
 
-    if (typeof x === 'number' && typeof y === 'number') {
+    if (typeof label === 'number') {
+      el = document.querySelector(`[data-browserpilot-label="${label}"]`);
+    }
+
+    if (!el && typeof x === 'number' && typeof y === 'number') {
       el = document.elementFromPoint(x, y);
     }
 
@@ -347,7 +355,98 @@
     return { scrollY: window.scrollY };
   }
 
-  // --- 6. Evaluate Script ---
+  // --- 6. Upload File To Input ---
+  async function uploadFileToInput({ selector, filename = 'upload.dat', mimeType = 'application/octet-stream', base64Data }) {
+    let el = selector ? document.querySelector(selector) : null;
+    if (!el) {
+      el = document.querySelector('input[type="file"]');
+    }
+    if (!el) {
+      throw new Error(`File input element not found for selector: "${selector || 'input[type="file"]'}"`);
+    }
+
+    // Convert base64 to Blob/File
+    const binary = atob(base64Data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const file = new File([bytes], filename, { type: mimeType });
+
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    el.files = dataTransfer.files;
+
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+
+    return {
+      ok: true,
+      filename,
+      size: bytes.length,
+      selector: generateUniqueSelector(el)
+    };
+  }
+
+  // --- 7. Label Interactive Elements (OmniParser mode) ---
+  async function labelInteractiveElements({ remove = false } = {}) {
+    // Remove existing badges
+    document.querySelectorAll('.browserpilot-label-badge').forEach((b) => b.remove());
+    document.querySelectorAll('[data-browserpilot-label]').forEach((el) => {
+      el.removeAttribute('data-browserpilot-label');
+    });
+
+    if (remove) {
+      return { ok: true, message: 'Labels cleared', count: 0 };
+    }
+
+    const nodes = document.querySelectorAll(
+      'button, a[href], input, textarea, select, [role="button"], [role="link"], [role="checkbox"], [tabindex]:not([tabindex="-1"])'
+    );
+
+    let count = 0;
+    const labeledList = [];
+
+    nodes.forEach((el) => {
+      if (!isVisible(el)) return;
+      count++;
+      el.setAttribute('data-browserpilot-label', String(count));
+
+      const rect = el.getBoundingClientRect();
+      const badge = document.createElement('div');
+      badge.className = 'browserpilot-label-badge';
+      badge.innerText = String(count);
+      badge.style.position = 'fixed';
+      badge.style.left = `${Math.max(0, rect.left)}px`;
+      badge.style.top = `${Math.max(0, rect.top - 12)}px`;
+      badge.style.backgroundColor = '#ec4899'; // Vibrant pink/magenta
+      badge.style.color = '#ffffff';
+      badge.style.fontSize = '11px';
+      badge.style.fontWeight = 'bold';
+      badge.style.padding = '1px 5px';
+      badge.style.borderRadius = '4px';
+      badge.style.zIndex = '2147483647';
+      badge.style.pointerEvents = 'none';
+      badge.style.boxShadow = '0 2px 5px rgba(0,0,0,0.4)';
+      badge.style.fontFamily = 'monospace';
+      document.body.appendChild(badge);
+
+      const text = (el.innerText || el.getAttribute('aria-label') || el.value || '').trim().slice(0, 40);
+      labeledList.push({
+        label: count,
+        tag: el.tagName.toLowerCase(),
+        text,
+        selector: generateUniqueSelector(el)
+      });
+    });
+
+    return {
+      count,
+      labels: labeledList.slice(0, 150)
+    };
+  }
+
+  // --- 8. Evaluate Script ---
   async function evaluateScript({ script }) {
     const fn = new Function(`return (${script});`);
     const res = fn();

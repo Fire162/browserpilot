@@ -19,7 +19,11 @@ export type BrowserActionType =
   | 'press_key'
   | 'scroll'
   | 'screenshot'
-  | 'evaluate';
+  | 'evaluate'
+  | 'run_code'
+  | 'get_cookies'
+  | 'upload_file'
+  | 'label_elements';
 
 export interface CommandRequest {
   id: string;
