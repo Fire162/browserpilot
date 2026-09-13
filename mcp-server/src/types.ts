@@ -43,3 +43,9 @@ export interface WebSocketInboundMessage {
   error?: string;
   data?: any;
 }
+
+export interface BrowserDispatcher {
+  getStatus(): { connected: boolean; lastSeen: string | null; port?: number } | Promise<{ connected: boolean; lastSeen: string | null; port?: number }>;
+  dispatch<T = any>(action: BrowserActionType, params?: Record<string, any>, timeoutMs?: number): Promise<T>;
+}
+

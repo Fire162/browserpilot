@@ -1,15 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { WebSocketHub } from './websocket-hub.js';
+import { BrowserDispatcher } from './types.js';
 
-export function registerBrowserTools(server: McpServer, hub: WebSocketHub) {
+export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) {
   // 1. browser_status
   server.tool(
     'browser_status',
     'Check if the BrowserPilot Chrome extension is currently connected from your local computer, along with connection latency and status.',
     {},
     async () => {
-      const status = hub.getStatus();
+      const status = await hub.getStatus();
       if (!status.connected) {
         return {
           content: [

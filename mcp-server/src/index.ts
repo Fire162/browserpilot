@@ -69,6 +69,25 @@ async function main() {
       return;
     }
 
+    // Direct RPC Dispatch endpoint for stdio-bridge or HTTP clients
+    if (parsedUrl.pathname === '/api/dispatch' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', async () => {
+        try {
+          const { action, params, timeoutMs } = JSON.parse(body || '{}');
+          const result = await hub.dispatch(action, params || {}, timeoutMs || 35000);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, result }));
+        } catch (err: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: err.message }));
+        }
+      });
+      return;
+    }
+
+
     // MCP SSE connection endpoint
     if (parsedUrl.pathname === '/sse') {
       console.error('[MCP SSE] Client initiating SSE connection...');
