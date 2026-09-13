@@ -7,11 +7,20 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Chrome Extension](https://img.shields.io/badge/Manifest-V3-success?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Standard-purple?logo=anthropic&logoColor=white)](https://modelcontextprotocol.io/)
+[![Troubleshooting](https://img.shields.io/badge/Guide-Troubleshooting-orange?logo=github)](TROUBLESHOOTING.md)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 <p align="center">
   <b>Seamlessly bridge your cloud AI agents to your authenticated, everyday desktop browser.</b><br>
   No Playwright overhead • No Chrome debug banners • Undetected by anti-bot checks • Zero NAT/port-forwarding hassle
+</p>
+
+<p align="center">
+  <a href="#-quick-verification-test">🧪 Quick Test</a> •
+  <a href="#-mcp-tools-reference">🛠️ MCP Tools</a> •
+  <a href="#-quickstart-guide">🚀 Quickstart</a> •
+  <a href="TROUBLESHOOTING.md">🔧 Troubleshooting</a> •
+  <a href="skills/browserpilot/SKILL.md">🤖 AI Agent Skill</a>
 </p>
 
 </div>
@@ -26,6 +35,20 @@ When building autonomous AI agents on a remote VPS, interacting with modern webs
 - Remote debugging ports (`--remote-debugging-port=9222`) trigger Chrome's prominent yellow *"Browser is being controlled by automated software"* banner.
 
 **BrowserPilot** solves this by establishing a secure, persistent outbound WebSocket bridge directly from your local Chrome/Brave/Edge browser to your VPS MCP server. Your VPS AI agent can interact with your real, authenticated browser tabs using realistic DOM events while keeping the connection ultra-lightweight and invisible.
+
+---
+
+## 🧪 Quick Verification Test
+
+Once your browser extension is connected, copy and paste this command directly to your AI agent to verify everything is working end-to-end:
+
+```text
+Open instagram.com and follow abhinav.nexus
+```
+
+> [!TIP]
+> When you give this command to your agent, it will automatically navigate your browser, locate the profile, and click Follow. The agent will confirm:
+> **"BrowserPilot is working properly!"**
 
 ---
 
@@ -256,3 +279,25 @@ Add BrowserPilot to your agent's MCP configuration:
 > - **Pre-Shared Secret**: Set a strong `SECRET_TOKEN` in your environment.
 > - **Encryption**: When running over public networks, route through an encrypted tunnel (Cloudflare Tunnel, Tailscale, or Nginx with Let's Encrypt `wss://`).
 > - **Visual Feedback**: When an AI agent clicks or interacts with elements, BrowserPilot highlights them with green/blue halos in real-time so you always see what the agent is doing.
+
+---
+
+## 🤖 AI Agent Skill
+
+BrowserPilot includes a dedicated AI Agent skill definition located in [`skills/browserpilot/SKILL.md`](skills/browserpilot/SKILL.md).
+
+To equip your Antigravity or custom agent with native BrowserPilot capabilities:
+1. Copy or symlink `skills/browserpilot` into your agent's skills directory (e.g. `~/.gemini/skills/browserpilot`).
+2. Your agent will automatically learn the tool semantics, resilience rules, non-intrusive multitasking behavior, and the standard verification prompt:
+   ```text
+   Open instagram.com and follow abhinav.nexus
+   ```
+
+---
+
+## 🔧 Troubleshooting & Known Issues
+
+Facing port conflicts, Chrome MV3 restrictions, strict CSP errors, or disconnects?
+
+👉 **Read the comprehensive [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) guide** for detailed solutions to every common edge case.
+
