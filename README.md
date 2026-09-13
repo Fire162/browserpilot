@@ -36,23 +36,23 @@ sequenceDiagram
     autonumber
     actor User as You (Local PC)
     participant Ext as Chrome Extension (MV3)
-    participant Off as Offscreen Document (Persistent WS)
+    participant Relay as Offscreen Document (Persistent WS)
     participant MCP as VPS MCP Server
     actor Agent as AI Agent (Claude/Cursor/AGY)
 
     User->>Ext: Loads Extension & Enters VPS Endpoint
-    Ext->>Off: Initializes Background Offscreen Relay
-    Off->>MCP: Outbound WebSocket Connect (ws://<your-vps-ip>:8765?token=...)
-    MCP-->>Off: Auth Verified (200 OK)
+    Ext->>Relay: Initializes Background Offscreen Relay
+    Relay->>MCP: Outbound WebSocket Connect (ws://<your-vps-ip>:8765?token=...)
+    MCP-->>Relay: Auth Verified (200 OK)
     
     rect rgb(30, 41, 59)
         note right of Agent: AI Agent executes browser action
         Agent->>MCP: Call Tool: browser_click({ selector: "#submit" })
-        MCP->>Off: Send JSON Command (ID: cmd_101)
-        Off->>Ext: Dispatch to Content Script
+        MCP->>Relay: Send JSON Command (ID: cmd_101)
+        Relay->>Ext: Dispatch to Content Script
         Ext->>Ext: Highlight element & dispatch native mouse events
-        Ext-->>Off: Action Succeeded
-        Off-->>MCP: Return Result (ID: cmd_101)
+        Ext-->>Relay: Action Succeeded
+        Relay-->>MCP: Return Result (ID: cmd_101)
         MCP-->>Agent: Tool Response: "Clicked #submit successfully"
     end
 ```
