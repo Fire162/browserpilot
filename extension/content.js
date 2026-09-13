@@ -230,6 +230,8 @@
       clientY
     };
 
+    el.dispatchEvent(new MouseEvent('mouseenter', eventOpts));
+    el.dispatchEvent(new MouseEvent('mouseover', eventOpts));
     el.dispatchEvent(new PointerEvent('pointerdown', eventOpts));
     el.dispatchEvent(new MouseEvent('mousedown', eventOpts));
     el.focus();
@@ -238,8 +240,13 @@
     el.dispatchEvent(new MouseEvent('click', eventOpts));
 
     if (typeof el.click === 'function') {
-      el.click();
+      try {
+        el.click();
+      } catch (e) {}
     }
+
+    // Wait 300ms for UI / menus / animations to open
+    await new Promise((r) => setTimeout(r, 300));
 
     return {
       description: `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className ? '.' + el.className.split(' ')[0] : ''} ("${(el.innerText || el.value || '').slice(0, 40)}")`
