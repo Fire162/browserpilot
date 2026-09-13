@@ -1,0 +1,20 @@
+{
+  "name": "browserpilot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Control your local browser from a remote VPS AI Agent via Chrome Extension and Model Context Protocol (MCP)",
+  "scripts": {
+    "server": "pnpm --filter browserpilot-mcp start",
+    "dev": "pnpm --filter browserpilot-mcp dev",
+    "build": "pnpm --filter browserpilot-mcp build"
+  },
+  "keywords": [
+    "mcp",
+    "browser-automation",
+    "chrome-extension",
+    "ai-agent",
+    "model-context-protocol"
+  ],
+  "author": "",
+  "license": "MIT"
+}

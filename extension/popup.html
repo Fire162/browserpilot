@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BrowserPilot</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <div class="container">
+      <!-- Header -->
+      <header class="header">
+        <div class="brand">
+          <div class="logo-icon">🚀</div>
+          <div class="brand-text">
+            <h1>BrowserPilot</h1>
+            <span class="subtitle">VPS AI Agent Bridge</span>
+          </div>
+        </div>
+        <div id="status-badge" class="badge disconnected">
+          <span class="dot"></span>
+          <span id="status-text">Disconnected</span>
+        </div>
+      </header>
+
+      <!-- Connection Settings Form -->
+      <div class="card">
+        <div class="form-group">
+          <label for="ws-url">VPS WebSocket Endpoint</label>
+          <input
+            type="text"
+            id="ws-url"
+            placeholder="ws://<your-vps-ip>:8765"
+            spellcheck="false"
+          >
+          <span class="hint">e.g. ws://&lt;your-vps-ip&gt;:8765 or wss://tunnel.domain.com</span>
+        </div>
+
+        <div class="form-group">
+          <label for="secret-token">Secret Token</label>
+          <div class="input-password-wrapper">
+            <input
+              type="password"
+              id="secret-token"
+              placeholder="Enter matching server SECRET_TOKEN"
+            >
+            <button type="button" id="toggle-token-visibility" class="btn-icon" title="Toggle visibility">👁️</button>
+          </div>
+        </div>
+
+        <div class="form-check">
+          <input type="checkbox" id="auto-connect" checked>
+          <label for="auto-connect">Auto-reconnect on browser startup</label>
+        </div>
+
+        <div class="btn-group">
+          <button type="button" id="btn-toggle-connection" class="btn btn-primary">Connect</button>
+          <button type="button" id="btn-test-ping" class="btn btn-secondary" disabled>Ping</button>
+        </div>
+      </div>
+
+      <!-- Active Status Box -->
+      <div class="card status-box">
+        <div class="status-row">
+          <span class="label">Bridge Status:</span>
+          <span id="bridge-message" class="value">Ready to connect</span>
+        </div>
+        <div class="status-row">
+          <span class="label">Active Tab:</span>
+          <span id="active-tab-info" class="value text-truncate">Loading...</span>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <footer class="footer">
+        <span>Model Context Protocol (MCP) Compatible</span>
+      </footer>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

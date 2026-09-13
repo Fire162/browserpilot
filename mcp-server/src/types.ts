@@ -1,0 +1,45 @@
+export interface BrowserTab {
+  id: number;
+  title: string;
+  url: string;
+  active: boolean;
+  windowId: number;
+  favIconUrl?: string;
+}
+
+export type BrowserActionType =
+  | 'status'
+  | 'list_tabs'
+  | 'navigate'
+  | 'switch_tab'
+  | 'close_tab'
+  | 'read_page'
+  | 'click'
+  | 'type'
+  | 'press_key'
+  | 'scroll'
+  | 'screenshot'
+  | 'evaluate';
+
+export interface CommandRequest {
+  id: string;
+  action: BrowserActionType;
+  params: Record<string, any>;
+}
+
+export interface CommandResponse {
+  id: string;
+  success: boolean;
+  result?: any;
+  error?: string;
+}
+
+export interface WebSocketInboundMessage {
+  type?: 'ping' | 'pong' | 'hello' | 'response';
+  id?: string;
+  timestamp?: number;
+  success?: boolean;
+  result?: any;
+  error?: string;
+  data?: any;
+}

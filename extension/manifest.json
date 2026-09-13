@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "BrowserPilot",
+  "version": "1.0.0",
+  "description": "Control your local browser from a remote VPS AI Agent via Model Context Protocol (MCP)",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "offscreen",
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "BrowserPilot Control",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
