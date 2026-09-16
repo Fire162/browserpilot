@@ -17,7 +17,7 @@ BrowserPilot enables AI agents hosted on remote virtual private servers (VPS) to
 +------------------------------------+                 +-----------------------------------+
 | Extension (Manifest V3)            |                 | BrowserPilot MCP Server           |
 | - offscreen.html/js (Persistent WS)| ==============> | - websocket-hub.ts (Port 8765)    |
-| - background.js (Tab router)       | (Outbound TLS)  | - tools.ts (16 MCP Tools)         |
+| - background.js (Tab router)       | (Outbound TLS)  | - tools.ts (20 MCP Tools)         |
 | - content.js (DOM engine)          |                 | - index.ts (Stdio MCP Transport)  |
 +------------------------------------+                 +-----------------------------------+
                                                                          |

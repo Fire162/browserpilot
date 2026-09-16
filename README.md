@@ -91,7 +91,7 @@ sequenceDiagram
 
 ## 🛠️ MCP Tools Reference
 
-BrowserPilot exposes 16 specialized tools directly to any MCP-compatible AI agent:
+BrowserPilot exposes 20 specialized tools directly to any MCP-compatible AI agent:
 
 | MCP Tool | Description | Key Parameters |
 | :--- | :--- | :--- |
@@ -101,8 +101,8 @@ BrowserPilot exposes 16 specialized tools directly to any MCP-compatible AI agen
 | `browser_switch_tab`| Switches focus and brings a specific tab to the foreground. | `tabId` |
 | `browser_close_tab` | Closes a specific tab. | `tabId?` |
 | `browser_read_page` | Extracts readable text, clean markdown, or interactive element catalog. | `format?` (`markdown`, `interactive_elements`, `text`, `html`), `maxLength?`, `tabId?` |
-| `browser_click` | Clicks an element by selector, text, numeric badge label, or x/y coordinates. | `selector?`, `text?`, `label?`, `x?`, `y?`, `tabId?` |
-| `browser_type` | Types into an input/textarea with realistic input events. | `selector`, `text`, `clear?`, `pressEnter?` |
+| `browser_click` | Clicks an element by selector, text, badge label, or x/y. Supports human Bezier curve trajectories. | `selector?`, `text?`, `label?`, `x?`, `y?`, `humanize?`, `tabId?` |
+| `browser_type` | Types into an input/textarea with realistic input events and human variable delays. | `selector`, `text`, `clear?`, `pressEnter?`, `humanize?`, `tabId?` |
 | `browser_press_key`| Dispatches keyboard events (`Enter`, `Escape`, `Tab`, `ArrowDown`). | `key`, `tabId?` |
 | `browser_scroll` | Scrolls the page in any direction or scrolls an element into view. | `direction?` (`up`, `down`, `top`, `bottom`), `amount?`, `selector?` |
 | `browser_take_screenshot` | Captures the active viewport (preserves user active tab). | `tabId?` |
@@ -111,6 +111,10 @@ BrowserPilot exposes 16 specialized tools directly to any MCP-compatible AI agen
 | `browser_get_cookies`| 🍪 Extracts active cookies & session tokens for current domain. | `tabId?` |
 | `browser_upload_file`| 📁 Directly populates `<input type="file">` with base64 data. | `base64Data`, `filename`, `mimeType?`, `selector?`, `tabId?` |
 | `browser_label_elements`| 🎯 Numbers all interactive elements on screen (OmniParser mode). | `remove?`, `tabId?` |
+| `browser_handle_dialog`| 🛑 Intercepts & handles native JavaScript dialogs (`alert`, `confirm`, `prompt`, `beforeunload`). | `action?` (`accept`, `dismiss`), `promptText?`, `setPolicy?`, `tabId?` |
+| `browser_wait_for_network_idle`| ⏳ Waits until all active XHR/fetch requests settle on single-page apps. | `idleTimeMs?`, `timeoutMs?`, `tabId?` |
+| `browser_clipboard`| 📋 Reads from or writes text to the desktop browser clipboard. | `action` (`read`, `write`), `text?` |
+| `browser_downloads`| 📂 Lists recent downloads or waits for an active file download to complete. | `action?` (`list`, `wait`), `filenamePattern?`, `downloadId?`, `limit?`, `timeoutMs?` |
 
 ---
 

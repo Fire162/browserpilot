@@ -40,6 +40,51 @@ chrome.runtime.onStartup.addListener(() => {
 // Run setup immediately on service worker initialization
 setupOffscreenDocument();
 
+// In-flight network requests tracking per tab
+const activeRequestsByTab = new Map();
+
+function trackRequestStart(tabId, requestId) {
+  if (!tabId || tabId < 0) return;
+  if (!activeRequestsByTab.has(tabId)) {
+    activeRequestsByTab.set(tabId, new Set());
+  }
+  activeRequestsByTab.get(tabId).add(requestId);
+}
+
+function trackRequestEnd(tabId, requestId) {
+  if (!tabId || tabId < 0) return;
+  const requests = activeRequestsByTab.get(tabId);
+  if (requests) {
+    requests.delete(requestId);
+    if (requests.size === 0) {
+      activeRequestsByTab.delete(tabId);
+    }
+  }
+}
+
+if (chrome.webRequest) {
+  chrome.webRequest.onBeforeRequest.addListener(
+    (details) => {
+      trackRequestStart(details.tabId, details.requestId);
+    },
+    { urls: ['<all_urls>'] }
+  );
+
+  chrome.webRequest.onCompleted.addListener(
+    (details) => {
+      trackRequestEnd(details.tabId, details.requestId);
+    },
+    { urls: ['<all_urls>'] }
+  );
+
+  chrome.webRequest.onErrorOccurred.addListener(
+    (details) => {
+      trackRequestEnd(details.tabId, details.requestId);
+    },
+    { urls: ['<all_urls>'] }
+  );
+}
+
 // Update extension badge on status change
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'CONNECTION_STATUS_UPDATE') {
@@ -115,6 +160,17 @@ async function handleCommand(action, params = {}) {
       return getCookiesForTab(params);
     case 'evaluate':
       return evaluateWithScripting(params);
+    case 'wait_for_network_idle':
+      return waitForNetworkIdle(params);
+    case 'get_clipboard':
+      return getClipboardContent();
+    case 'set_clipboard':
+      return setClipboardContent(params);
+    case 'list_downloads':
+      return listRecentDownloads(params);
+    case 'wait_for_download':
+      return waitForDownloadComplete(params);
+    case 'handle_dialog':
     case 'upload_file':
     case 'label_elements':
     case 'read_page':
@@ -405,5 +461,238 @@ function waitForTabLoad(tabId, timeoutMs = 15000) {
     }, timeoutMs);
 
     chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+// --- Network Idle, Clipboard & Download Implementations ---
+
+async function waitForNetworkIdle({ tabId, idleTimeMs = 500, timeoutMs = 15000 }) {
+  const targetTab = tabId ? await chrome.tabs.get(tabId) : await getActiveTab();
+  if (!targetTab || !targetTab.id) {
+    throw new Error('No target tab found to wait for network idle');
+  }
+
+  const tid = targetTab.id;
+  const startTime = Date.now();
+
+  return new Promise((resolve, reject) => {
+    let idleTimer = null;
+    let pollInterval = null;
+
+    const cleanup = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (pollInterval) clearInterval(pollInterval);
+    };
+
+    const checkStatus = () => {
+      if (Date.now() - startTime >= timeoutMs) {
+        cleanup();
+        const activeCount = activeRequestsByTab.get(tid)?.size || 0;
+        resolve({
+          idle: false,
+          timedOut: true,
+          inFlightRequests: activeCount,
+          durationMs: Date.now() - startTime
+        });
+        return;
+      }
+
+      const activeCount = activeRequestsByTab.get(tid)?.size || 0;
+      if (activeCount === 0) {
+        if (!idleTimer) {
+          idleTimer = setTimeout(() => {
+            cleanup();
+            resolve({
+              idle: true,
+              timedOut: false,
+              inFlightRequests: 0,
+              durationMs: Date.now() - startTime
+            });
+          }, idleTimeMs);
+        }
+      } else {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
+      }
+    };
+
+    pollInterval = setInterval(checkStatus, 50);
+    checkStatus();
+  });
+}
+
+async function getClipboardContent() {
+  // Read clipboard text from active tab or offscreen document
+  const activeTab = await getActiveTab().catch(() => null);
+  if (activeTab && activeTab.id) {
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: activeTab.id },
+        func: async () => {
+          try {
+            return await navigator.clipboard.readText();
+          } catch (e) {
+            return { __clipboard_error: e.message || String(e) };
+          }
+        }
+      });
+      const res = results?.[0]?.result;
+      if (res && typeof res === 'object' && res.__clipboard_error) {
+        throw new Error(res.__clipboard_error);
+      }
+      return { text: typeof res === 'string' ? res : '' };
+    } catch (e) {
+      console.warn('[BrowserPilot Background] Scripting clipboard read failed, falling back:', e.message);
+    }
+  }
+
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'OFFSCREEN_READ_CLIPBOARD' }, (response) => {
+      if (response && response.text !== undefined) {
+        resolve({ text: response.text });
+      } else {
+        resolve({ text: '', note: 'Clipboard empty or access denied' });
+      }
+    });
+  });
+}
+
+async function setClipboardContent({ text = '' }) {
+  const activeTab = await getActiveTab().catch(() => null);
+  if (activeTab && activeTab.id) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: activeTab.id },
+        func: async (val) => {
+          await navigator.clipboard.writeText(val);
+        },
+        args: [text]
+      });
+      return { ok: true, textLength: text.length };
+    } catch (e) {
+      console.warn('[BrowserPilot Background] Scripting clipboard write failed, falling back:', e.message);
+    }
+  }
+
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'OFFSCREEN_WRITE_CLIPBOARD', text }, (response) => {
+      resolve({ ok: true, textLength: text.length });
+    });
+  });
+}
+
+async function listRecentDownloads({ limit = 10, state }) {
+  if (!chrome.downloads) {
+    throw new Error('Downloads API not available');
+  }
+
+  const query = { limit, orderBy: ['-startTime'] };
+  if (state) {
+    query.state = state; // 'in_progress', 'complete', or 'interrupted'
+  }
+
+  const items = await chrome.downloads.search(query);
+  return items.map((item) => ({
+    id: item.id,
+    filename: item.filename,
+    url: item.url,
+    totalBytes: item.totalBytes,
+    bytesReceived: item.bytesReceived,
+    state: item.state,
+    danger: item.danger,
+    mime: item.mime,
+    startTime: item.startTime,
+    endTime: item.endTime,
+    exists: item.exists
+  }));
+}
+
+async function waitForDownloadComplete({ downloadId, filenamePattern, timeoutMs = 30000 }) {
+  if (!chrome.downloads) {
+    throw new Error('Downloads API not available');
+  }
+
+  const startTime = Date.now();
+
+  return new Promise((resolve, reject) => {
+    let timer = null;
+
+    const checkExisting = async () => {
+      let query = { orderBy: ['-startTime'], limit: 5 };
+      if (downloadId) query.id = downloadId;
+
+      const items = await chrome.downloads.search(query);
+      for (const item of items) {
+        const matchesName = !filenamePattern || item.filename.toLowerCase().includes(filenamePattern.toLowerCase());
+        if (matchesName) {
+          if (item.state === 'complete') {
+            cleanup();
+            resolve({
+              completed: true,
+              download: {
+                id: item.id,
+                filename: item.filename,
+                totalBytes: item.totalBytes,
+                mime: item.mime,
+                url: item.url
+              }
+            });
+            return true;
+          } else if (item.state === 'interrupted') {
+            cleanup();
+            reject(new Error(`Download interrupted: ${item.error || 'Unknown error'}`));
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    const changeListener = (delta) => {
+      if (downloadId && delta.id !== downloadId) return;
+
+      if (delta.state) {
+        if (delta.state.current === 'complete') {
+          chrome.downloads.search({ id: delta.id }).then(([item]) => {
+            if (item) {
+              const matchesName = !filenamePattern || item.filename.toLowerCase().includes(filenamePattern.toLowerCase());
+              if (matchesName) {
+                cleanup();
+                resolve({
+                  completed: true,
+                  download: {
+                    id: item.id,
+                    filename: item.filename,
+                    totalBytes: item.totalBytes,
+                    mime: item.mime,
+                    url: item.url
+                  }
+                });
+              }
+            }
+          });
+        } else if (delta.state.current === 'interrupted') {
+          cleanup();
+          reject(new Error(`Download interrupted (ID: ${delta.id})`));
+        }
+      }
+    };
+
+    const cleanup = () => {
+      chrome.downloads.onChanged.removeListener(changeListener);
+      if (timer) clearTimeout(timer);
+    };
+
+    chrome.downloads.onChanged.addListener(changeListener);
+
+    timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Download timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    // Initial check in case it already completed
+    checkExisting();
   });
 }

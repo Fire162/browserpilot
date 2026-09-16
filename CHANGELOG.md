@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-09-16 23:45 IST
+
+### Added
+* `browser_handle_dialog`: Intercepts and auto-resolves JavaScript native alerts, confirms, prompts, and beforeunload modals to prevent browser tabs from freezing during automated runs.
+* `browser_wait_for_network_idle`: Monitors in-flight HTTP/XHR/fetch requests per tab using `chrome.webRequest` and settles on single-page applications before continuing.
+* `browser_clipboard`: Read and write clipboard text from the desktop browser.
+* `browser_downloads`: Inspect recent downloads and await file download completion (`browser_downloads({ action: 'wait', filenamePattern: '.pdf' })`).
+* Anti-Detection Humanization Engine: Realistic Bezier curve mouse trajectories with micro-jitters and natural keystroke delays (40ms–140ms) integrated into `browser_click` and `browser_type`.
+
+### Changed
+* Bumped total registered MCP tools from 16 to 20.
+* Updated Chrome Extension Manifest permissions with `downloads`, `clipboardRead`, `clipboardWrite`, and `webRequest`.
+
 ## [1.1.0] - 2026-09-14 01:20 IST
 
 ### Added

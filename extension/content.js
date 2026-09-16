@@ -8,6 +8,65 @@
 
   console.log('[BrowserPilot Content] DOM Engine initialized on:', window.location.href);
 
+  // Native Dialog Interception to prevent tab freeze
+  let pendingDialog = null;
+  let dialogActionPolicy = null; // null | 'accept' | 'dismiss'
+  let dialogDefaultPrompt = '';
+
+  const originalAlert = window.alert;
+  const originalConfirm = window.confirm;
+  const originalPrompt = window.prompt;
+
+  window.alert = function (message) {
+    console.log('[BrowserPilot] Intercepted alert:', message);
+    pendingDialog = { type: 'alert', message: String(message), timestamp: Date.now() };
+    if (dialogActionPolicy === 'dismiss' || dialogActionPolicy === 'accept') {
+      const res = pendingDialog;
+      pendingDialog = null;
+      return;
+    }
+    // Auto-resolve to prevent tab freeze if no agent policy set
+    pendingDialog.autoHandled = true;
+  };
+
+  window.confirm = function (message) {
+    console.log('[BrowserPilot] Intercepted confirm:', message);
+    pendingDialog = { type: 'confirm', message: String(message), timestamp: Date.now() };
+    if (dialogActionPolicy === 'dismiss') {
+      pendingDialog = null;
+      return false;
+    }
+    if (dialogActionPolicy === 'accept') {
+      pendingDialog = null;
+      return true;
+    }
+    // Default to true so user workflows continue
+    pendingDialog.autoHandled = true;
+    return true;
+  };
+
+  window.prompt = function (message, defaultVal = '') {
+    console.log('[BrowserPilot] Intercepted prompt:', message);
+    pendingDialog = { type: 'prompt', message: String(message), defaultValue: defaultVal, timestamp: Date.now() };
+    if (dialogActionPolicy === 'dismiss') {
+      pendingDialog = null;
+      return null;
+    }
+    if (dialogActionPolicy === 'accept') {
+      const val = dialogDefaultPrompt || defaultVal;
+      pendingDialog = null;
+      return val;
+    }
+    return defaultVal;
+  };
+
+  // Prevent beforeunload prompts from blocking automation
+  window.addEventListener('beforeunload', (e) => {
+    if (dialogActionPolicy === 'accept' || dialogActionPolicy === 'dismiss') {
+      delete e['returnValue'];
+    }
+  }, { capture: true });
+
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type !== 'DOM_ACTION') return;
 
@@ -36,9 +95,28 @@
         return labelInteractiveElements(params);
       case 'evaluate':
         return evaluateScript(params);
+      case 'handle_dialog':
+        return handleDialogAction(params);
       default:
         throw new Error(`Unknown DOM action: ${action}`);
     }
+  }
+
+  function handleDialogAction({ action = 'accept', promptText = '', setPolicy = false }) {
+    if (setPolicy) {
+      dialogActionPolicy = action; // 'accept' or 'dismiss'
+      dialogDefaultPrompt = promptText;
+      return { ok: true, policySet: action, promptText };
+    }
+
+    const current = pendingDialog;
+    pendingDialog = null;
+
+    return {
+      ok: true,
+      handledDialog: current || null,
+      message: current ? `Handled ${current.type} dialog with action "${action}"` : 'No pending dialog was open'
+    };
   }
 
   // --- 1. Read Page Content ---
@@ -185,7 +263,7 @@
   }
 
   // --- 2. Click Element ---
-  async function clickElement({ selector, text, x, y, index, label }) {
+  async function clickElement({ selector, text, x, y, index, label, humanize = false }) {
     let el = null;
 
     if (typeof label === 'number') {
@@ -225,11 +303,17 @@
     // Wait a brief moment for scroll to settle
     await new Promise((r) => setTimeout(r, 150));
 
-    // Dispatch realistic sequence of pointer & mouse events
     const rect = el.getBoundingClientRect();
     const clientX = rect.left + rect.width / 2;
     const clientY = rect.top + rect.height / 2;
 
+    if (humanize) {
+      await simulateHumanMouseTrajectory(clientX, clientY);
+      // Human dwell time before click down
+      await new Promise((r) => setTimeout(r, 50 + Math.floor(Math.random() * 80)));
+    }
+
+    // Dispatch realistic sequence of pointer & mouse events
     const eventOpts = {
       bubbles: true,
       cancelable: true,
@@ -243,6 +327,9 @@
     el.dispatchEvent(new PointerEvent('pointerdown', eventOpts));
     el.dispatchEvent(new MouseEvent('mousedown', eventOpts));
     el.focus();
+    if (humanize) {
+      await new Promise((r) => setTimeout(r, 30 + Math.floor(Math.random() * 50)));
+    }
     el.dispatchEvent(new PointerEvent('pointerup', eventOpts));
     el.dispatchEvent(new MouseEvent('mouseup', eventOpts));
     el.dispatchEvent(new MouseEvent('click', eventOpts));
@@ -262,7 +349,7 @@
   }
 
   // --- 3. Type Into Element ---
-  async function typeIntoElement({ selector, text, clear = false, pressEnter = false }) {
+  async function typeIntoElement({ selector, text, clear = false, pressEnter = false, humanize = false }) {
     let el = selector ? document.querySelector(selector) : null;
     if (!el && document.activeElement && (document.activeElement.isContentEditable || document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
       el = document.activeElement;
@@ -278,39 +365,57 @@
     highlightElement(el, '#3b82f6'); // Blue highlight
     el.focus();
 
-    if (el.isContentEditable) {
-      if (clear) {
+    if (clear) {
+      if (el.isContentEditable) {
         el.innerText = '';
-      }
-      document.execCommand('insertText', false, text);
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      if (clear) {
+      } else {
         el.value = '';
+      }
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    if (humanize) {
+      // Natural human variable keystroke simulation
+      for (const char of text) {
+        if (el.isContentEditable) {
+          document.execCommand('insertText', false, char);
+        } else {
+          el.value = (el.value || '') + char;
+        }
+        dispatchKeyEvent(el, char);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        // Randomized delay between 40ms and 140ms
+        await new Promise((r) => setTimeout(r, 40 + Math.floor(Math.random() * 100)));
+      }
+      if (!el.isContentEditable) {
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    } else {
+      if (el.isContentEditable) {
+        document.execCommand('insertText', false, text);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLInputElement.prototype,
+          'value'
+        )?.set;
+        const nativeTextareaValueSetter = Object.getOwnPropertyDescriptor(
+          window.HTMLTextAreaElement.prototype,
+          'value'
+        )?.set;
+
+        if (el instanceof HTMLTextAreaElement && nativeTextareaValueSetter) {
+          nativeTextareaValueSetter.call(el, (el.value || '') + text);
+        } else if (el instanceof HTMLInputElement && nativeInputValueSetter) {
+          nativeInputValueSetter.call(el, (el.value || '') + text);
+        } else {
+          el.value = (el.value || '') + text;
+        }
+
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }
-
-      // Set value and trigger native events
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        'value'
-      )?.set;
-      const nativeTextareaValueSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype,
-        'value'
-      )?.set;
-
-      if (el instanceof HTMLTextAreaElement && nativeTextareaValueSetter) {
-        nativeTextareaValueSetter.call(el, (el.value || '') + text);
-      } else if (el instanceof HTMLInputElement && nativeInputValueSetter) {
-        nativeInputValueSetter.call(el, (el.value || '') + text);
-      } else {
-        el.value = (el.value || '') + text;
-      }
-
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
     if (pressEnter) {
@@ -537,6 +642,50 @@
     element.dispatchEvent(new KeyboardEvent('keydown', opts));
     element.dispatchEvent(new KeyboardEvent('keypress', opts));
     element.dispatchEvent(new KeyboardEvent('keyup', opts));
+  }
+
+  // --- Humanization Engine (Anti-Detection) ---
+  let lastMousePos = { x: 100, y: 100 };
+
+  async function simulateHumanMouseTrajectory(targetX, targetY) {
+    const startX = lastMousePos.x;
+    const startY = lastMousePos.y;
+    const distance = Math.hypot(targetX - startX, targetY - startY);
+    const steps = Math.min(Math.max(Math.floor(distance / 25), 8), 25);
+
+    // Quadratic Bezier curve with control point deviation
+    const deviation = (Math.random() - 0.5) * Math.min(distance * 0.4, 150);
+    const midX = (startX + targetX) / 2 + deviation;
+    const midY = (startY + targetY) / 2 + deviation;
+
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      // Bezier formula B(t) = (1-t)^2*P0 + 2(1-t)t*P1 + t^2*P2
+      const cx = (1 - t) * (1 - t) * startX + 2 * (1 - t) * t * midX + t * t * targetX;
+      const cy = (1 - t) * (1 - t) * startY + 2 * (1 - t) * t * midY + t * t * targetY;
+
+      // Micro-jitter
+      const jitterX = (Math.random() - 0.5) * 2;
+      const jitterY = (Math.random() - 0.5) * 2;
+
+      const clientX = Math.round(cx + jitterX);
+      const clientY = Math.round(cy + jitterY);
+
+      window.dispatchEvent(
+        new MouseEvent('mousemove', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY
+        })
+      );
+
+      // Sleep between 8ms and 20ms
+      await new Promise((r) => setTimeout(r, 8 + Math.floor(Math.random() * 12)));
+    }
+
+    lastMousePos = { x: targetX, y: targetY };
   }
 
   function generateUniqueSelector(el) {

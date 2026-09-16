@@ -196,7 +196,7 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
   // 7. browser_click
   server.tool(
     'browser_click',
-    'Click an element on the current page using a CSS selector or matching text label.',
+    'Click an element on the current page using a CSS selector, matching text label, coordinates, or OmniParser badge number.',
     {
       selector: z.string().optional().describe("CSS selector for the element (e.g. 'button.btn-primary', '#login-btn', 'a.nav-link')"),
       text: z.string().optional().describe("Text content inside the element to match and click (e.g. 'Log In', 'Submit', 'Next')"),
@@ -204,9 +204,10 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       y: z.number().optional().describe('Y coordinate on the viewport to click'),
       index: z.number().optional().describe('If selector matches multiple elements, which index to click (0-based, or -1 for last)'),
       label: z.number().optional().describe('Numeric badge label from browser_label_elements to click (e.g. 1, 2, 3)'),
+      humanize: z.boolean().optional().describe('Simulate human Bezier curve mouse trajectory with jitter and natural dwell time to bypass bot detection (default false)'),
       tabId: z.number().optional().describe('Target tab ID')
     },
-    async ({ selector, text, x, y, index, label, tabId }) => {
+    async ({ selector, text, x, y, index, label, humanize = false, tabId }) => {
       if (!selector && !text && typeof x !== 'number' && typeof label !== 'number') {
         return {
           isError: true,
@@ -215,7 +216,7 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       }
 
       try {
-        const result = await hub.dispatch('click', { selector, text, x, y, index, label, tabId }, 20000);
+        const result = await hub.dispatch('click', { selector, text, x, y, index, label, humanize, tabId }, 25000);
         return {
           content: [
             {
@@ -242,11 +243,12 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       text: z.string().describe('The text string to type'),
       clear: z.boolean().optional().describe('Whether to clear existing text in the input field before typing (default false)'),
       pressEnter: z.boolean().optional().describe('Whether to trigger an Enter key press immediately after typing (default false)'),
+      humanize: z.boolean().optional().describe('Simulate realistic human typing with variable keystroke delay (40ms-140ms) and keydown/keypress/input/keyup event dispatch (default false)'),
       tabId: z.number().optional().describe('Target tab ID')
     },
-    async ({ selector, text, clear = false, pressEnter = false, tabId }) => {
+    async ({ selector, text, clear = false, pressEnter = false, humanize = false, tabId }) => {
       try {
-        const result = await hub.dispatch('type', { selector, text, clear, pressEnter, tabId }, 20000);
+        const result = await hub.dispatch('type', { selector, text, clear, pressEnter, humanize, tabId }, 30000);
         return {
           content: [
             {
@@ -520,6 +522,154 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to label elements: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // 17. browser_handle_dialog
+  server.tool(
+    'browser_handle_dialog',
+    'Intercept, accept, or dismiss native JavaScript dialogs (alert, confirm, prompt, beforeunload) and configure auto-handling policies to prevent tab freezing.',
+    {
+      action: z.enum(['accept', 'dismiss']).optional().describe("Action to take on pending or future dialogs (default 'accept')"),
+      promptText: z.string().optional().describe("Text value to submit into window.prompt dialogs (default '')"),
+      setPolicy: z.boolean().optional().describe('If true, sets persistent policy for all future dialogs on the page (default false)'),
+      tabId: z.number().optional().describe('Target tab ID')
+    },
+    async ({ action = 'accept', promptText = '', setPolicy = false, tabId }) => {
+      try {
+        const result = await hub.dispatch('handle_dialog', { action, promptText, setPolicy, tabId }, 15000);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: result.policySet
+                ? `✅ Dialog policy set to "${result.policySet}". Future alerts/confirms/prompts will be automatically handled.`
+                : `✅ ${result.message || 'Dialog action processed successfully.'}`
+            }
+          ]
+        };
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to handle dialog: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // 18. browser_wait_for_network_idle
+  server.tool(
+    'browser_wait_for_network_idle',
+    'Wait until all in-flight network requests (XHR, fetch, resources) have settled on single-page applications before continuing.',
+    {
+      idleTimeMs: z.number().optional().describe('Continuous duration with 0 active requests required to consider the page idle in milliseconds (default 500ms)'),
+      timeoutMs: z.number().optional().describe('Maximum duration to wait before timing out in milliseconds (default 15000ms)'),
+      tabId: z.number().optional().describe('Target tab ID')
+    },
+    async ({ idleTimeMs = 500, timeoutMs = 15000, tabId }) => {
+      try {
+        const result = await hub.dispatch('wait_for_network_idle', { idleTimeMs, timeoutMs, tabId }, timeoutMs + 5000);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: result.idle
+                ? `✅ Network idle achieved in ${result.durationMs}ms (0 in-flight requests).`
+                : `⚠️ Network did not settle within timeout (${result.durationMs}ms). Remaining in-flight requests: ${result.inFlightRequests}.`
+            }
+          ]
+        };
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed waiting for network idle: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // 19. browser_clipboard
+  server.tool(
+    'browser_clipboard',
+    'Read from or write text to the desktop browser clipboard.',
+    {
+      action: z.enum(['read', 'write']).describe("Action to perform: 'read' to get clipboard text, 'write' to set it"),
+      text: z.string().optional().describe("The text to copy into the clipboard (required when action is 'write')")
+    },
+    async ({ action, text = '' }) => {
+      try {
+        if (action === 'read') {
+          const result = await hub.dispatch('get_clipboard', {}, 15000);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: result.text ? `📋 Clipboard contents:\n${result.text}` : '(Clipboard is currently empty)'
+              }
+            ]
+          };
+        } else {
+          await hub.dispatch('set_clipboard', { text }, 15000);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `✅ Copied ${text.length} characters to clipboard successfully.`
+              }
+            ]
+          };
+        }
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Clipboard operation failed: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // 20. browser_downloads
+  server.tool(
+    'browser_downloads',
+    'Inspect, list recent browser downloads, or wait for an active file download to complete.',
+    {
+      action: z.enum(['list', 'wait']).optional().describe("Action to perform: 'list' to show recent downloads, 'wait' to wait for completion (default 'list')"),
+      filenamePattern: z.string().optional().describe("Substring of filename to match when waiting for a download (e.g. 'invoice', '.pdf', '.csv')"),
+      downloadId: z.number().optional().describe('Specific download ID to wait for'),
+      limit: z.number().optional().describe("Number of recent downloads to return when listing (default 10)"),
+      timeoutMs: z.number().optional().describe("Timeout in milliseconds when waiting for a download (default 30000ms)")
+    },
+    async ({ action = 'list', filenamePattern, downloadId, limit = 10, timeoutMs = 30000 }) => {
+      try {
+        if (action === 'wait') {
+          const result = await hub.dispatch('wait_for_download', { filenamePattern, downloadId, timeoutMs }, timeoutMs + 5000);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `✅ Download completed successfully!\n- Filename: ${result.download?.filename}\n- Total Size: ${result.download?.totalBytes} bytes\n- MIME: ${result.download?.mime || 'unknown'}`
+              }
+            ]
+          };
+        } else {
+          const items = await hub.dispatch('list_downloads', { limit }, 15000);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: items && items.length > 0
+                  ? `📂 Recent Downloads (${items.length}):\n${JSON.stringify(items, null, 2)}`
+                  : '📂 No recent downloads found.'
+              }
+            ]
+          };
+        }
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Downloads operation failed: ${err.message}` }]
         };
       }
     }

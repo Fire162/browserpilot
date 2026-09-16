@@ -206,4 +206,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return false;
   }
+
+  if (request.type === 'OFFSCREEN_READ_CLIPBOARD') {
+    navigator.clipboard.readText()
+      .then((text) => sendResponse({ text }))
+      .catch((err) => sendResponse({ text: '', error: err.message }));
+    return true;
+  }
+
+  if (request.type === 'OFFSCREEN_WRITE_CLIPBOARD') {
+    navigator.clipboard.writeText(request.text || '')
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
 });

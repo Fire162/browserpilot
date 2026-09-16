@@ -23,7 +23,13 @@ export type BrowserActionType =
   | 'run_code'
   | 'get_cookies'
   | 'upload_file'
-  | 'label_elements';
+  | 'label_elements'
+  | 'handle_dialog'
+  | 'wait_for_network_idle'
+  | 'get_clipboard'
+  | 'set_clipboard'
+  | 'list_downloads'
+  | 'wait_for_download';
 
 export interface CommandRequest {
   id: string;

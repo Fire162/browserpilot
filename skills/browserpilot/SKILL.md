@@ -46,6 +46,10 @@ All tools are registered under the MCP server name `browserpilot`:
 | `browser_get_cookies` | 🍪 Extract active cookies | Retrieve session credentials and auth cookies for the current domain. |
 | `browser_upload_file` | 📁 File upload automation | Upload files into `<input type="file">` elements using base64 data. |
 | `browser_label_elements`| 🎯 OmniParser element labeling | Injects visual numbered badges `[1]`, `[2]` and click with `browser_click({ label: N })`. |
+| `browser_handle_dialog`| 🛑 Native dialog management | Intercepts & handles `alert`, `confirm`, `prompt`, `beforeunload` to prevent tab freezing. |
+| `browser_wait_for_network_idle`| ⏳ Wait for network requests | Resolves when in-flight XHR/fetch calls settle on single-page applications. |
+| `browser_clipboard` | 📋 Clipboard read/write | Access desktop clipboard contents or copy text programmatically. |
+| `browser_downloads` | 📂 Download tracking | Lists recent downloads or waits for an ongoing file download to complete. |
 
 ---
 
