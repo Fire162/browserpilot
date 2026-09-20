@@ -17,8 +17,8 @@ BrowserPilot enables AI agents hosted on remote virtual private servers (VPS) to
 +------------------------------------+                 +-----------------------------------+
 | Extension (Manifest V3)            |                 | BrowserPilot MCP Server           |
 | - offscreen.html/js (Persistent WS)| ==============> | - websocket-hub.ts (Port 8765)    |
-| - background.js (Tab router)       | (Outbound TLS)  | - tools.ts (20 MCP Tools)         |
-| - content.js (DOM engine)          |                 | - index.ts (Stdio MCP Transport)  |
+| - background.js (Tab router & Perms)| (Outbound TLS) | - tools.ts (21 MCP Tools)         |
+| - content.js (DOM engine & Banner) |                 | - index.ts (Stdio MCP Transport)  |
 +------------------------------------+                 +-----------------------------------+
                                                                          |
                                                                          v
@@ -32,12 +32,13 @@ BrowserPilot enables AI agents hosted on remote virtual private servers (VPS) to
    - Listens on `stdio` for agent prompts and runs an internal WebSocket server (default port `8765`).
    - Dispatches structured JSON commands to the connected extension and awaits responses with request timeouts.
    - Requires token-based authorization (`SECRET_TOKEN`).
+   - Exposes 21 MCP tools including `browser_request_tab_access`.
 
 2. **`extension/`**:
    - Chrome Manifest V3 extension.
    - **`offscreen.html` & `offscreen.js`**: Critical for maintaining the WebSocket connection 24/7 without being affected by Manifest V3 service worker 30-second idling.
-   - **`background.js`**: Manages tab lifecycle, screenshot capture via `chrome.tabs.captureVisibleTab`, and routes messages to content scripts.
-   - **`content.js`**: In-page DOM execution engine. Dispatches realistic input and mouse events, highlights targeted elements with visual colored halos, and extracts clean markdown/text or interactive element inventories.
+   - **`background.js`**: Manages tab lifecycle, screenshot capture via `chrome.tabs.captureVisibleTab`, routes messages to content scripts, and enforces the **Hybrid Privacy & Tab Permission Engine** (auto-approving agent-created tabs while gating pre-existing user tabs).
+   - **`content.js`**: In-page DOM execution engine. Dispatches realistic input and mouse events, displays floating permission approval banners, highlights targeted elements with visual colored halos, and extracts clean markdown/text or interactive element inventories.
 
 ---
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BrowserPilot",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Control your local browser from a remote VPS AI Agent via Model Context Protocol (MCP)",
   "permissions": [
     "tabs",

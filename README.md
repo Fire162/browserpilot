@@ -91,13 +91,13 @@ sequenceDiagram
 
 ## 🛠️ MCP Tools Reference
 
-BrowserPilot exposes 20 specialized tools directly to any MCP-compatible AI agent:
+BrowserPilot exposes 21 specialized tools directly to any MCP-compatible AI agent:
 
 | MCP Tool | Description | Key Parameters |
 | :--- | :--- | :--- |
 | `browser_status` | Checks if local browser extension is connected and reports latency. | *None* |
-| `browser_list_tabs` | Lists all open tabs across your browser windows with titles & URLs. | *None* |
-| `browser_navigate` | Navigates the current tab (or opens a new tab) to a given URL. | `url`, `newTab?`, `tabId?` |
+| `browser_list_tabs` | Lists all open tabs across your browser windows with titles, URLs, and permission status. | *None* |
+| `browser_navigate` | Navigates the current tab (or opens a new tab) to a given URL. Auto-approved in Hybrid mode. | `url`, `newTab?`, `tabId?` |
 | `browser_switch_tab`| Switches focus and brings a specific tab to the foreground. | `tabId` |
 | `browser_close_tab` | Closes a specific tab. | `tabId?` |
 | `browser_read_page` | Extracts readable text, clean markdown, or interactive element catalog. | `format?` (`markdown`, `interactive_elements`, `text`, `html`), `maxLength?`, `tabId?` |
@@ -115,6 +115,22 @@ BrowserPilot exposes 20 specialized tools directly to any MCP-compatible AI agen
 | `browser_wait_for_network_idle`| ⏳ Waits until all active XHR/fetch requests settle on single-page apps. | `idleTimeMs?`, `timeoutMs?`, `tabId?` |
 | `browser_clipboard`| 📋 Reads from or writes text to the desktop browser clipboard. | `action` (`read`, `write`), `text?` |
 | `browser_downloads`| 📂 Lists recent downloads or waits for an active file download to complete. | `action?` (`list`, `wait`), `filenamePattern?`, `downloadId?`, `limit?`, `timeoutMs?` |
+| `browser_request_tab_access`| 🛡️ Requests explicit user permission to access a protected pre-existing tab. | `tabId`, `reason?`, `timeoutSeconds?` |
+
+---
+
+## 🛡️ Hybrid Privacy & Tab Permission Engine
+
+BrowserPilot features an intelligent, multi-tier privacy boundary ensuring that AI agents cannot inspect or tamper with your personal tabs without consent:
+
+- **🟢 Auto-Approved Agent Tabs (Zero Friction)**: Any tab spawned by the agent via `browser_navigate({ url, newTab: true })` is tagged as agent-owned. The agent can browse, click, type, screenshot, and close within its own tabs with 100% autonomy.
+- **🔒 Protected User Tabs**: Pre-existing tabs (e.g. Gmail, Slack, banking, personal dashboards) are shielded by default. If an agent attempts to interact with an unapproved tab:
+  - An elegant, floating banner slides down on that tab: *"🤖 AI Agent is requesting permission to access this tab. [Allow Access] [Deny]"*.
+  - The MCP server returns an immediate `PERMISSION_REQUIRED` response informing the agent that user authorization is required.
+  - The agent can also explicitly call `browser_request_tab_access({ tabId, reason })` to request permission with a custom explanation.
+- **⚙️ Extension Popup Privacy Shield**:
+  - **Privacy Mode Selector**: Switch between `Hybrid (Recommended)`, `Full Access (Unrestricted)`, and `Strict Sandbox (Agent Tabs Only)` in one click.
+  - **Live Tabs Permission Manager**: View all open browser tabs in the popup with real-time status chips (`Agent Tab`, `Protected`, `Allowed`) and quick **Allow** / **Revoke** action buttons.
 
 ---
 

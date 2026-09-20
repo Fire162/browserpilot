@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-09-20 12:10 IST
+
+### Added
+* Hybrid Privacy & Tab Permission Engine:
+  * Automatic approval for tabs spawned by the AI agent (`browser_navigate({ url, newTab: true })`), enabling seamless, zero-friction autonomous workflows.
+  * Strong boundary protection for pre-existing user tabs (personal email, banking, sensitive accounts), preventing unauthorized DOM access, screenshots, and session inspection.
+  * In-page floating permission banner in content scripts when an agent requests interaction with a protected user tab, featuring real-time **Allow Access** and **Deny** actions.
+* `browser_request_tab_access`: Dedicated MCP tool enabling AI agents to explicitly request user permission on a protected tab with a clear explanation and configurable timeout.
+* Privacy Shield & Tab Permissions Manager in extension popup:
+  * Privacy Mode selector: `Hybrid (Default)`, `Full Access (Unrestricted)`, and `Strict Sandbox (Agent Tabs Only)`.
+  * Live open tabs permissions list displaying active tabs with ownership chips (`Agent Tab`, `Protected`, `Allowed`) and interactive Allow/Revoke toggles.
+
+### Changed
+* Total MCP tools expanded from 20 to 21.
+* `browser_list_tabs`: Enhanced tab listing output to report permission ownership status (`🟢 [AGENT-OWNED]`, `🛡️ [USER-APPROVED]`, `🔒 [PROTECTED - Permission Required]`).
+* `browser_navigate`: Updated tool documentation to highlight auto-approval for new tabs under Hybrid Privacy mode.
+
 ## [1.2.0] - 2026-09-16 23:45 IST
 
 ### Added
