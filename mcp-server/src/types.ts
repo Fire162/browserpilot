@@ -5,6 +5,8 @@ export interface BrowserTab {
   active: boolean;
   windowId: number;
   favIconUrl?: string;
+  isAgentOwned?: boolean;
+  isApproved?: boolean;
 }
 
 export type BrowserActionType =
@@ -29,7 +31,8 @@ export type BrowserActionType =
   | 'get_clipboard'
   | 'set_clipboard'
   | 'list_downloads'
-  | 'wait_for_download';
+  | 'wait_for_download'
+  | 'request_tab_access';
 
 export interface CommandRequest {
   id: string;

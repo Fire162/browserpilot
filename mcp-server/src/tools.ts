@@ -45,7 +45,7 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
   // 2. browser_list_tabs
   server.tool(
     'browser_list_tabs',
-    'List all open tabs in your local browser, including tab IDs, URLs, page titles, and active tab status.',
+    'List all open tabs in your local browser, including tab IDs, URLs, page titles, active tab status, and privacy permission state (Agent-Owned vs User-Protected).',
     {},
     async () => {
       try {
@@ -55,10 +55,14 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
         }
 
         const formatted = tabs
-          .map(
-            (t: any) =>
-              `- [Tab #${t.id}] ${t.active ? '⭐ (ACTIVE) ' : ''}"${t.title}"\n  URL: ${t.url}`
-          )
+          .map((t: any) => {
+            const statusTag = t.isAgentOwned
+              ? '🟢 [AGENT-OWNED] '
+              : t.isApproved
+              ? '🛡️ [USER-APPROVED] '
+              : '🔒 [PROTECTED - Permission Required] ';
+            return `- [Tab #${t.id}] ${t.active ? '⭐ (ACTIVE) ' : ''}${statusTag}"${t.title}"\n  URL: ${t.url}`;
+          })
           .join('\n\n');
 
         return {
@@ -81,10 +85,10 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
   // 3. browser_navigate
   server.tool(
     'browser_navigate',
-    'Navigate the active browser tab (or open a new tab) to a specified URL.',
+    'Navigate the active browser tab (or open a new tab) to a specified URL. Under Hybrid Privacy mode, opening a new tab (newTab: true) automatically grants full agent access without user prompting.',
     {
       url: z.string().describe("The URL to navigate to (e.g. 'https://github.com' or 'https://google.com')"),
-      newTab: z.boolean().optional().describe('If true, opens in a new tab instead of navigating the current tab'),
+      newTab: z.boolean().optional().describe('If true, opens in a new tab (auto-approved under Hybrid Privacy mode)'),
       tabId: z.number().optional().describe('Target a specific tab ID instead of the active tab')
     },
     async ({ url, newTab, tabId }) => {
@@ -670,6 +674,50 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
         return {
           isError: true,
           content: [{ type: 'text', text: `Downloads operation failed: ${err.message}` }]
+        };
+      }
+    }
+  );
+
+  // 21. browser_request_tab_access
+  server.tool(
+    'browser_request_tab_access',
+    'Request permission from the user to access a protected user tab. Displays an in-page banner and popup notification to the user.',
+    {
+      tabId: z.number().describe('The ID of the protected tab to request access to'),
+      reason: z.string().optional().describe('Clear explanation of why you need access to this tab (e.g., "I need to inspect the invoice details on this page")'),
+      timeoutSeconds: z.number().optional().describe('How many seconds to wait for user approval (default 25s, max 60s)')
+    },
+    async ({ tabId, reason, timeoutSeconds = 25 }) => {
+      try {
+        const timeoutMs = Math.min(Math.max(timeoutSeconds, 5), 60) * 1000;
+        const result = await hub.dispatch(
+          'request_tab_access',
+          { tabId, reason, timeoutMs },
+          timeoutMs + 5000
+        );
+        if (result.approved) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `✅ Permission GRANTED for Tab #${result.tabId} ("${result.title || 'Untitled'}"). You may now read, screenshot, and interact with this tab.`
+              }
+            ]
+          };
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `❌ Permission ${result.timedOut ? 'TIMED OUT' : 'DENIED'} for Tab #${result.tabId} ("${result.title || 'Untitled'}"). Please operate in a new tab via browser_navigate({ url, newTab: true }).`
+            }
+          ]
+        };
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to request tab access: ${err.message}` }]
         };
       }
     }

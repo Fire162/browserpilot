@@ -85,6 +85,193 @@ if (chrome.webRequest) {
   );
 }
 
+// --- Hybrid Privacy & Tab Permission Engine ---
+let privacyMode = 'hybrid'; // 'hybrid' | 'full' | 'sandbox'
+const agentOwnedTabs = new Set();
+const approvedUserTabs = new Set();
+const pendingPermissionRequests = new Map();
+
+// Initialize privacy preferences & state
+chrome.storage.local.get(['privacyMode', 'approvedUserTabs', 'agentOwnedTabs'], (data) => {
+  if (data.privacyMode) {
+    privacyMode = data.privacyMode;
+  }
+  if (Array.isArray(data.approvedUserTabs)) {
+    data.approvedUserTabs.forEach((id) => approvedUserTabs.add(id));
+  }
+  if (Array.isArray(data.agentOwnedTabs)) {
+    data.agentOwnedTabs.forEach((id) => agentOwnedTabs.add(id));
+  }
+});
+
+function savePrivacyState() {
+  chrome.storage.local.set({
+    privacyMode,
+    approvedUserTabs: Array.from(approvedUserTabs),
+    agentOwnedTabs: Array.from(agentOwnedTabs)
+  });
+}
+
+function isTabApproved(tabId) {
+  if (privacyMode === 'full') return true;
+  if (agentOwnedTabs.has(tabId)) return true;
+  if (privacyMode === 'sandbox') return false;
+  return approvedUserTabs.has(tabId);
+}
+
+function markTabAsAgentOwned(tabId) {
+  agentOwnedTabs.add(tabId);
+  savePrivacyState();
+}
+
+function approveTabAccess(tabId) {
+  approvedUserTabs.add(tabId);
+  savePrivacyState();
+  chrome.tabs.sendMessage(tabId, { type: 'CLEAR_PERMISSION_BANNER' }).catch(() => {});
+}
+
+function revokeTabAccess(tabId) {
+  approvedUserTabs.delete(tabId);
+  agentOwnedTabs.delete(tabId);
+  savePrivacyState();
+}
+
+// Cleanup on tab removal
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (approvedUserTabs.has(tabId) || agentOwnedTabs.has(tabId)) {
+    revokeTabAccess(tabId);
+  }
+  if (pendingPermissionRequests.has(tabId)) {
+    const cb = pendingPermissionRequests.get(tabId);
+    pendingPermissionRequests.delete(tabId);
+    cb(false);
+  }
+  activeRequestsByTab.delete(tabId);
+});
+
+async function requestTabAccessFromUser(tabId, reason) {
+  try {
+    await ensureContentScriptInjected(tabId);
+    chrome.tabs.sendMessage(tabId, {
+      type: 'SHOW_PERMISSION_BANNER',
+      reason: reason || 'AI Agent is requesting permission to view and interact with this tab.',
+      timeoutMs: 25000
+    }).catch(() => {});
+  } catch (err) {
+    console.warn('[BrowserPilot Background] Could not show permission banner:', err.message);
+  }
+}
+
+async function handleRequestTabAccess({ tabId, reason, timeoutMs = 25000 } = {}) {
+  const targetTab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await getActiveTab().catch(() => null);
+  if (!targetTab || !targetTab.id) {
+    throw new Error('No target browser tab found to request access');
+  }
+
+  const tid = targetTab.id;
+  if (isTabApproved(tid)) {
+    return {
+      approved: true,
+      tabId: tid,
+      title: targetTab.title,
+      isAgentOwned: agentOwnedTabs.has(tid),
+      message: 'Tab is already approved for agent access'
+    };
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        pendingPermissionRequests.delete(tid);
+        chrome.tabs.sendMessage(tid, { type: 'CLEAR_PERMISSION_BANNER' }).catch(() => {});
+        resolve({
+          approved: false,
+          timedOut: true,
+          tabId: tid,
+          title: targetTab.title,
+          message: 'Permission request timed out waiting for user approval'
+        });
+      }
+    }, timeoutMs);
+
+    pendingPermissionRequests.set(tid, (approved) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        pendingPermissionRequests.delete(tid);
+        resolve({
+          approved,
+          timedOut: false,
+          tabId: tid,
+          title: targetTab.title,
+          message: approved ? 'User approved access to tab' : 'User denied access to tab'
+        });
+      }
+    });
+
+    requestTabAccessFromUser(tid, reason);
+  });
+}
+
+async function checkCommandPermission(action, params = {}) {
+  if (privacyMode === 'full') return;
+
+  // Actions that never require tab authorization
+  if ([
+    'status',
+    'list_tabs',
+    'request_tab_access',
+    'reload_extension',
+    'get_clipboard',
+    'set_clipboard',
+    'list_downloads',
+    'wait_for_download',
+    'switch_tab'
+  ].includes(action)) {
+    return;
+  }
+
+  // Navigate with newTab: true always permitted (spawns an agent-owned tab)
+  if (action === 'navigate' && params.newTab) {
+    return;
+  }
+
+  // Determine target tab ID
+  let targetTabId = params.tabId;
+  if (!targetTabId) {
+    const active = await getActiveTab().catch(() => null);
+    if (!active || !active.id) {
+      throw new Error('No active browser tab found');
+    }
+    targetTabId = active.id;
+  }
+
+  if (isTabApproved(targetTabId)) {
+    return;
+  }
+
+  // Target tab is protected
+  const targetTab = await chrome.tabs.get(targetTabId).catch(() => null);
+  const tabTitle = targetTab?.title || 'Untitled';
+  const tabUrl = targetTab?.url || '';
+
+  // Trigger permission banner on target tab
+  requestTabAccessFromUser(targetTabId, `AI Agent requested '${action}' access`).catch(() => {});
+
+  if (privacyMode === 'sandbox') {
+    throw new Error(
+      `PERMISSION_REQUIRED: Tab #${targetTabId} ("${tabTitle}") was not opened by BrowserPilot. Strict Sandbox mode is active, which restricts AI actions exclusively to tabs spawned by the agent.`
+    );
+  }
+
+  throw new Error(
+    `PERMISSION_REQUIRED: Tab #${targetTabId} ("${tabTitle}") is a protected user tab. A permission request banner has been displayed on this tab and in the BrowserPilot extension popup. Please ask the user to grant access in their browser, or open a new tab via browser_navigate({ url: "${tabUrl || 'https://...'}", newTab: true }).`
+  );
+}
+
 // Update extension badge on status change
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'CONNECTION_STATUS_UPDATE') {
@@ -120,6 +307,64 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     return true; // async sendResponse
   }
+
+  if (msg.type === 'GET_PRIVACY_STATE') {
+    sendResponse({
+      privacyMode,
+      approvedUserTabs: Array.from(approvedUserTabs),
+      agentOwnedTabs: Array.from(agentOwnedTabs)
+    });
+    return false;
+  }
+
+  if (msg.type === 'SET_PRIVACY_MODE') {
+    if (['hybrid', 'full', 'sandbox'].includes(msg.privacyMode)) {
+      privacyMode = msg.privacyMode;
+      savePrivacyState();
+    }
+    sendResponse({ ok: true, privacyMode });
+    return false;
+  }
+
+  if (msg.type === 'APPROVE_TAB') {
+    approveTabAccess(msg.tabId);
+    if (pendingPermissionRequests.has(msg.tabId)) {
+      const cb = pendingPermissionRequests.get(msg.tabId);
+      pendingPermissionRequests.delete(msg.tabId);
+      cb(true);
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (msg.type === 'REVOKE_TAB') {
+    revokeTabAccess(msg.tabId);
+    if (pendingPermissionRequests.has(msg.tabId)) {
+      const cb = pendingPermissionRequests.get(msg.tabId);
+      pendingPermissionRequests.delete(msg.tabId);
+      cb(false);
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (msg.type === 'TAB_PERMISSION_RESPONSE') {
+    const tabId = sender.tab ? sender.tab.id : msg.tabId;
+    if (tabId) {
+      if (msg.approved) {
+        approveTabAccess(tabId);
+      } else {
+        revokeTabAccess(tabId);
+      }
+      if (pendingPermissionRequests.has(tabId)) {
+        const cb = pendingPermissionRequests.get(tabId);
+        pendingPermissionRequests.delete(tabId);
+        cb(Boolean(msg.approved));
+      }
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
 });
 
 // 2. Command Execution Router (dispatched from offscreen.js)
@@ -138,6 +383,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 async function handleCommand(action, params = {}) {
+  await checkCommandPermission(action, params);
+
   switch (action) {
     case 'status':
       return getStatusInfo();
@@ -170,6 +417,8 @@ async function handleCommand(action, params = {}) {
       return listRecentDownloads(params);
     case 'wait_for_download':
       return waitForDownloadComplete(params);
+    case 'request_tab_access':
+      return handleRequestTabAccess(params);
     case 'handle_dialog':
     case 'upload_file':
     case 'label_elements':
@@ -203,7 +452,9 @@ async function listTabs() {
     url: t.url || '',
     active: t.active,
     windowId: t.windowId,
-    favIconUrl: t.favIconUrl
+    favIconUrl: t.favIconUrl,
+    isAgentOwned: agentOwnedTabs.has(t.id),
+    isApproved: isTabApproved(t.id)
   }));
 }
 
@@ -214,6 +465,7 @@ async function navigateTab({ url, newTab = false, tabId }) {
     if (newTab) {
       const created = await chrome.tabs.create({ url });
       targetTabId = created.id;
+      markTabAsAgentOwned(targetTabId);
     } else {
       const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       if (activeTab) {
@@ -222,6 +474,7 @@ async function navigateTab({ url, newTab = false, tabId }) {
       } else {
         const created = await chrome.tabs.create({ url });
         targetTabId = created.id;
+        markTabAsAgentOwned(targetTabId);
       }
     }
   } else {
@@ -234,7 +487,9 @@ async function navigateTab({ url, newTab = false, tabId }) {
   return {
     tabId: targetTabId,
     title: updatedTab.title,
-    url: updatedTab.url
+    url: updatedTab.url,
+    isAgentOwned: agentOwnedTabs.has(targetTabId),
+    isApproved: isTabApproved(targetTabId)
   };
 }
 
@@ -254,6 +509,7 @@ async function switchTab({ tabId }) {
 async function closeTab({ tabId }) {
   const targetId = tabId || (await getActiveTab()).id;
   await chrome.tabs.remove(targetId);
+  revokeTabAccess(targetId);
   return { ok: true, closedTabId: targetId };
 }
 

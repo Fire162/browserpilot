@@ -71,6 +71,35 @@
         </div>
       </div>
 
+      <!-- Privacy Shield & Tab Permissions Card -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>🛡️ Privacy Shield & Permissions</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="privacy-mode-select">Privacy Mode</label>
+          <select id="privacy-mode-select" class="form-select">
+            <option value="hybrid" selected>Hybrid (Auto-approve Agent Tabs)</option>
+            <option value="full">Full Access (Unrestricted)</option>
+            <option value="sandbox">Strict Sandbox (Agent Tabs Only)</option>
+          </select>
+          <span id="privacy-mode-desc" class="hint">Agent-created tabs are auto-approved. User tabs require your permission.</span>
+        </div>
+
+        <div class="permission-tabs-section">
+          <div class="tabs-header">
+            <label>Open Tabs Permissions</label>
+            <button type="button" id="btn-refresh-tabs" class="btn-refresh" title="Refresh tabs list">🔄</button>
+          </div>
+          <div id="tabs-list-container" class="tabs-list">
+            <div class="tab-list-loading">Loading open tabs...</div>
+          </div>
+        </div>
+      </div>
+
       <!-- Footer -->
       <footer class="footer">
         <span>Model Context Protocol (MCP) Compatible</span>

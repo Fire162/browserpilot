@@ -17,11 +17,12 @@ async function testMcpClient() {
   console.log(`🔌 Spawning MCP Server on stdio (WS_PORT=${TEST_PORT})...`);
   const transport = new StdioClientTransport({
     command: 'node',
-    args: [serverPath],
+    args: [serverPath, '--stdio'],
     env: {
       ...process.env,
       WS_PORT: TEST_PORT,
-      SECRET_TOKEN: TEST_TOKEN
+      SECRET_TOKEN: TEST_TOKEN,
+      MCP_STDIO: 'true'
     }
   });
 
@@ -97,6 +98,19 @@ async function testMcpClient() {
             result: { description: 'button#star ("Star")' }
           })
         );
+      } else if (msg.action === 'request_tab_access') {
+        ws.send(
+          JSON.stringify({
+            id: msg.id,
+            success: true,
+            result: {
+              approved: true,
+              tabId: msg.params.tabId,
+              title: 'Protected Dashboard',
+              message: 'User approved access to tab'
+            }
+          })
+        );
       }
     });
 
@@ -132,6 +146,15 @@ async function testMcpClient() {
   });
   console.log('Output from MCP:');
   console.log((clickRes.content as any)[0].text);
+
+  // 8. Call browser_request_tab_access
+  console.log('\n🛡️ Testing `browser_request_tab_access` tool...');
+  const permRes = await client.callTool({
+    name: 'browser_request_tab_access',
+    arguments: { tabId: 43, reason: 'Need to inspect dashboard table' }
+  });
+  console.log('Output from MCP:');
+  console.log((permRes.content as any)[0].text);
 
   // Teardown
   ws.close();

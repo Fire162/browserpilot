@@ -67,7 +67,164 @@
     }
   }, { capture: true });
 
+  // --- Tab Permission Banner Engine ---
+  let activePermissionBanner = null;
+
+  function clearPermissionBanner() {
+    if (activePermissionBanner) {
+      activePermissionBanner.style.opacity = '0';
+      activePermissionBanner.style.transform = 'translate(-50%, -20px)';
+      setTimeout(() => {
+        if (activePermissionBanner && activePermissionBanner.parentNode) {
+          activePermissionBanner.parentNode.removeChild(activePermissionBanner);
+        }
+        activePermissionBanner = null;
+      }, 250);
+    }
+  }
+
+  function showPermissionBanner({ reason = 'AI Agent is requesting permission to access this tab.', timeoutMs = 25000 } = {}) {
+    clearPermissionBanner();
+
+    const banner = document.createElement('div');
+    banner.id = 'browserpilot-permission-banner';
+    banner.style.cssText = `
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translate(-50%, -20px);
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #f8fafc;
+      border: 1px solid #3b82f6;
+      border-radius: 12px;
+      padding: 12px 18px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 15px rgba(59, 130, 246, 0.3);
+      z-index: 2147483647;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      opacity: 0;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      max-width: 580px;
+      pointer-events: auto;
+    `;
+
+    const icon = document.createElement('div');
+    icon.style.cssText = `
+      font-size: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(59, 130, 246, 0.15);
+      border-radius: 8px;
+      width: 38px;
+      height: 38px;
+      flex-shrink: 0;
+    `;
+    icon.textContent = '🤖';
+
+    const textContainer = document.createElement('div');
+    textContainer.style.cssText = 'display: flex; flex-direction: column; gap: 2px;';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight: 600; font-size: 13px; color: #ffffff; display: flex; align-items: center; gap: 6px;';
+    title.innerHTML = '<span>BrowserPilot Permission Request</span> <span style="background: #3b82f6; color: white; font-size: 10px; padding: 1px 6px; border-radius: 9999px;">Privacy Shield</span>';
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'color: #94a3b8; font-size: 12px; line-height: 1.3;';
+    desc.textContent = reason;
+
+    textContainer.appendChild(title);
+    textContainer.appendChild(desc);
+
+    const btnContainer = document.createElement('div');
+    btnContainer.style.cssText = 'display: flex; gap: 8px; align-items: center; margin-left: 8px; flex-shrink: 0;';
+
+    const btnAllow = document.createElement('button');
+    btnAllow.textContent = 'Allow Access';
+    btnAllow.style.cssText = `
+      background: #10b981;
+      color: #ffffff;
+      border: none;
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    `;
+    btnAllow.onmouseover = () => (btnAllow.style.background = '#059669');
+    btnAllow.onmouseout = () => (btnAllow.style.background = '#10b981');
+
+    const btnDeny = document.createElement('button');
+    btnDeny.textContent = 'Deny';
+    btnDeny.style.cssText = `
+      background: #334155;
+      color: #cbd5e1;
+      border: none;
+      padding: 7px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    `;
+    btnDeny.onmouseover = () => (btnDeny.style.background = '#475569');
+    btnDeny.onmouseout = () => (btnDeny.style.background = '#334155');
+
+    btnAllow.onclick = () => {
+      chrome.runtime.sendMessage({ type: 'TAB_PERMISSION_RESPONSE', approved: true }).catch(() => {});
+      title.innerHTML = '<span style="color: #10b981;">✓ Permission Granted</span>';
+      desc.textContent = 'AI Agent can now interact with this tab.';
+      btnAllow.remove();
+      btnDeny.remove();
+      setTimeout(clearPermissionBanner, 1500);
+    };
+
+    btnDeny.onclick = () => {
+      chrome.runtime.sendMessage({ type: 'TAB_PERMISSION_RESPONSE', approved: false }).catch(() => {});
+      clearPermissionBanner();
+    };
+
+    btnContainer.appendChild(btnAllow);
+    btnContainer.appendChild(btnDeny);
+
+    banner.appendChild(icon);
+    banner.appendChild(textContainer);
+    banner.appendChild(btnContainer);
+
+    document.body.appendChild(banner);
+    activePermissionBanner = banner;
+
+    requestAnimationFrame(() => {
+      banner.style.opacity = '1';
+      banner.style.transform = 'translate(-50%, 0)';
+    });
+
+    if (timeoutMs > 0) {
+      setTimeout(() => {
+        if (activePermissionBanner === banner) {
+          clearPermissionBanner();
+        }
+      }, timeoutMs);
+    }
+  }
+
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'SHOW_PERMISSION_BANNER') {
+      showPermissionBanner(request);
+      sendResponse({ ok: true });
+      return false;
+    }
+
+    if (request.type === 'CLEAR_PERMISSION_BANNER') {
+      clearPermissionBanner();
+      sendResponse({ ok: true });
+      return false;
+    }
+
     if (request.type !== 'DOM_ACTION') return;
 
     handleAction(request.action, request.params)

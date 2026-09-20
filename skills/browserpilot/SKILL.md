@@ -50,12 +50,20 @@ All tools are registered under the MCP server name `browserpilot`:
 | `browser_wait_for_network_idle`| ⏳ Wait for network requests | Resolves when in-flight XHR/fetch calls settle on single-page applications. |
 | `browser_clipboard` | 📋 Clipboard read/write | Access desktop clipboard contents or copy text programmatically. |
 | `browser_downloads` | 📂 Download tracking | Lists recent downloads or waits for an ongoing file download to complete. |
+| `browser_request_tab_access` | 🛡️ Request Tab Access | Explicitly request access to a protected user tab. Displays in-page banner and awaits approval. |
 
 ---
 
 ## ⚡ Agent Automation Guidelines
 
-### 1. Zero-Memory & Resilience
+### 1. Hybrid Privacy & Tab Ownership
+- **Agent-Spawned Tabs (Auto-Approved)**: Whenever starting an automation flow, always use `browser_navigate({ url, newTab: true })`. Tabs created by the agent are auto-approved for all operations (zero user friction).
+- **User Tabs (Protected)**: Existing user tabs (e.g. email, banking, personal dashboards) are protected by default.
+- **Requesting Tab Permission**: If a task requires inspecting or modifying a user's pre-existing tab, inspect `browser_list_tabs()`:
+  - If marked `🟢 [AGENT-OWNED]` or `🛡️ [USER-APPROVED]`, proceed normally.
+  - If marked `🔒 [PROTECTED - Permission Required]`, call `browser_request_tab_access({ tabId, reason: "..." })` before attempting DOM actions.
+
+### 2. Zero-Memory & Resilience
 - When automating tasks, do not assume fixed element IDs or pre-existing state.
 - Inspect the live DOM using `browser_read_page({ format: "interactive_elements", tabId })` to dynamically discover current element selectors and bounding coordinates.
 

@@ -114,6 +114,145 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  // 8. Privacy Shield & Permissions Manager
+  const privacyModeSelect = document.getElementById('privacy-mode-select');
+  const privacyModeDesc = document.getElementById('privacy-mode-desc');
+  const btnRefreshTabs = document.getElementById('btn-refresh-tabs');
+  const tabsListContainer = document.getElementById('tabs-list-container');
+
+  const modeDescriptions = {
+    hybrid: 'Agent-created tabs are auto-approved. User tabs require your permission.',
+    full: 'Unrestricted access: AI Agent can interact with all open tabs.',
+    sandbox: 'Strict Sandbox: AI Agent can only see and interact with tabs it opened.'
+  };
+
+  privacyModeSelect.addEventListener('change', () => {
+    const selectedMode = privacyModeSelect.value;
+    if (modeDescriptions[selectedMode]) {
+      privacyModeDesc.textContent = modeDescriptions[selectedMode];
+    }
+    chrome.runtime.sendMessage({ type: 'SET_PRIVACY_MODE', privacyMode: selectedMode }, () => {
+      loadPrivacyStateAndTabs();
+    });
+  });
+
+  if (btnRefreshTabs) {
+    btnRefreshTabs.addEventListener('click', () => {
+      loadPrivacyStateAndTabs();
+    });
+  }
+
+  function loadPrivacyStateAndTabs() {
+    chrome.runtime.sendMessage({ type: 'GET_PRIVACY_STATE' }, async (privacyState) => {
+      if (chrome.runtime.lastError || !privacyState) return;
+
+      if (privacyState.privacyMode) {
+        privacyModeSelect.value = privacyState.privacyMode;
+        if (modeDescriptions[privacyState.privacyMode]) {
+          privacyModeDesc.textContent = modeDescriptions[privacyState.privacyMode];
+        }
+      }
+
+      const agentOwnedTabs = new Set(privacyState.agentOwnedTabs || []);
+      const approvedUserTabs = new Set(privacyState.approvedUserTabs || []);
+      const mode = privacyState.privacyMode || 'hybrid';
+
+      try {
+        const tabs = await chrome.tabs.query({});
+        tabsListContainer.innerHTML = '';
+
+        if (!tabs || tabs.length === 0) {
+          tabsListContainer.innerHTML = '<div class="tab-list-empty">No open tabs found.</div>';
+          return;
+        }
+
+        tabs.forEach((tab) => {
+          const item = document.createElement('div');
+          item.className = 'tab-item';
+
+          const info = document.createElement('div');
+          info.className = 'tab-info';
+
+          const title = document.createElement('div');
+          title.className = 'tab-title';
+          title.textContent = tab.title || 'Untitled Tab';
+          title.title = tab.title || '';
+
+          const domain = document.createElement('div');
+          domain.className = 'tab-domain';
+          try {
+            const urlObj = new URL(tab.url || '');
+            domain.textContent = urlObj.hostname || tab.url || 'Internal';
+          } catch {
+            domain.textContent = tab.url || 'Internal';
+          }
+
+          info.appendChild(title);
+          info.appendChild(domain);
+
+          const actions = document.createElement('div');
+          actions.className = 'tab-actions';
+
+          const isAgent = agentOwnedTabs.has(tab.id);
+          const isApproved = approvedUserTabs.has(tab.id);
+
+          if (isAgent) {
+            const badge = document.createElement('span');
+            badge.className = 'tab-badge agent';
+            badge.textContent = 'Agent Tab';
+            actions.appendChild(badge);
+          } else if (mode === 'full') {
+            const badge = document.createElement('span');
+            badge.className = 'tab-badge approved';
+            badge.textContent = 'Full Access';
+            actions.appendChild(badge);
+          } else if (isApproved) {
+            const badge = document.createElement('span');
+            badge.className = 'tab-badge approved';
+            badge.textContent = 'Allowed';
+            actions.appendChild(badge);
+
+            const btnRevoke = document.createElement('button');
+            btnRevoke.className = 'btn-pill btn-revoke';
+            btnRevoke.textContent = 'Revoke';
+            btnRevoke.title = 'Revoke agent access to this tab';
+            btnRevoke.onclick = () => {
+              chrome.runtime.sendMessage({ type: 'REVOKE_TAB', tabId: tab.id }, () => {
+                loadPrivacyStateAndTabs();
+              });
+            };
+            actions.appendChild(btnRevoke);
+          } else {
+            const badge = document.createElement('span');
+            badge.className = 'tab-badge protected';
+            badge.textContent = 'Protected';
+            actions.appendChild(badge);
+
+            const btnAllow = document.createElement('button');
+            btnAllow.className = 'btn-pill btn-allow';
+            btnAllow.textContent = 'Allow';
+            btnAllow.title = 'Allow agent to access this tab';
+            btnAllow.onclick = () => {
+              chrome.runtime.sendMessage({ type: 'APPROVE_TAB', tabId: tab.id }, () => {
+                loadPrivacyStateAndTabs();
+              });
+            };
+            actions.appendChild(btnAllow);
+          }
+
+          item.appendChild(info);
+          item.appendChild(actions);
+          tabsListContainer.appendChild(item);
+        });
+      } catch (err) {
+        tabsListContainer.innerHTML = '<div class="tab-list-empty">Unable to query tabs.</div>';
+      }
+    });
+  }
+
+  // Initial load of privacy state and tab list
+  loadPrivacyStateAndTabs();
+
   // UI state manager
   function updateUIStatus(status, message) {
     currentStatus = status;
