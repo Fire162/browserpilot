@@ -213,6 +213,11 @@
   }
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'PING') {
+      sendResponse({ pong: true });
+      return false;
+    }
+
     if (request.type === 'SHOW_PERMISSION_BANNER') {
       showPermissionBanner(request);
       sendResponse({ ok: true });

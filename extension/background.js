@@ -695,7 +695,12 @@ async function ensureContentScriptInjected(tabId) {
   }
 }
 
-function waitForTabLoad(tabId, timeoutMs = 15000) {
+async function waitForTabLoad(tabId, timeoutMs = 15000) {
+  const initialTab = await chrome.tabs.get(tabId).catch(() => null);
+  if (initialTab && initialTab.status === 'complete') {
+    return;
+  }
+
   return new Promise((resolve) => {
     let timer = null;
 
