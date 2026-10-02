@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 <p align="center">
-  <b>Seamlessly bridge your cloud AI agents to your authenticated, everyday desktop browser.</b><br>
+  <b>Connect your cloud AI agents to your real, authenticated desktop browser over a secure WebSocket bridge.</b><br>
   No Playwright overhead • No Chrome debug banners • Undetected by anti-bot checks • Zero NAT/port-forwarding hassle
 </p>
 
@@ -26,7 +26,7 @@
 <blockquote>
   <p align="center">
     <i>"BrowserPilot is only as intelligent as the AI agent driving it."</i><br>
-    — <b>Abhinav Maurya</b>
+    <b>Abhinav Maurya</b>
   </p>
 </blockquote>
 
@@ -184,7 +184,7 @@ browserpilot/
 
 > [!TIP]
 > ### 🌐 Best Practice: Zero-Config Deployment with Fire PM Tunnels
-> Instead of manually opening firewall ports or wrestling with SSL certificates, you can supervise BrowserPilot 24/7 and expose an encrypted **HTTPS / WSS** tunnel using [**Fire PM**](https://github.com/Fire-Package/fire-pm) — the native Linux process supervisor & tunnel ecosystem.
+> Instead of manually opening firewall ports or configuring SSL certificates, you can run BrowserPilot as a persistent service and expose an encrypted **HTTPS / WSS** tunnel using [**Fire PM**](https://github.com/Fire-Package/fire-pm), the Linux process manager and tunnel tool.
 >
 > <details open>
 > <summary><b>Click to view Fire PM Setup Guide</b></summary>
