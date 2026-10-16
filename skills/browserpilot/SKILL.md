@@ -50,7 +50,38 @@ All tools are registered under the MCP server name `browserpilot`:
 | `browser_wait_for_network_idle`| ⏳ Wait for network requests | Resolves when in-flight XHR/fetch calls settle on single-page applications. |
 | `browser_clipboard` | 📋 Clipboard read/write | Access desktop clipboard contents or copy text programmatically. |
 | `browser_downloads` | 📂 Download tracking | Lists recent downloads or waits for an ongoing file download to complete. |
+| `browser_close_tabs` | 🗑️ Atomic batch close tabs | Close multiple tabs simultaneously by array of IDs or regex URL/title match. |
 | `browser_request_tab_access` | 🛡️ Request Tab Access | Explicitly request access to a protected user tab. Displays in-page banner and awaits approval. |
+
+---
+
+## 💻 BrowserPilot CLI (`bp`)
+
+For fast terminal diagnostics, tab cleanups, and scripted automation outside of MCP tool calls:
+
+```bash
+# Verify end-to-end environment, tunnel health, and extension connectivity
+bp doctor
+
+# Display daemon status, active tunnel, and focused tab info
+bp status
+
+# List open browser tabs with optional filter
+bp tabs list --filter=github
+
+# Batch close tabs by ID or regex URL match
+bp tabs close 1488399560 1488399570
+bp tabs close --match="youtube.com/@"
+
+# Navigate active tab or spawn isolated tab
+bp nav https://github.com --new-tab
+
+# Capture visual screenshot and save to disk
+bp snap /tmp/screenshot.jpg
+
+# Manage Fire PM reverse-proxy tunnel
+bp tunnel url
+```
 
 ---
 

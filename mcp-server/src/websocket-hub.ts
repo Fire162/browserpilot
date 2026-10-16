@@ -121,7 +121,7 @@ export class WebSocketHub {
   }
 
 
-  private authenticate(req: IncomingMessage): boolean {
+  public authenticate(req: IncomingMessage): boolean {
     if (!this.secretToken) return true;
 
     try {
@@ -217,9 +217,19 @@ export class WebSocketHub {
   public stop(): Promise<void> {
     return new Promise((resolve) => {
       if (this.wss) {
+        if (this.activeClient) {
+          try {
+            this.activeClient.terminate();
+          } catch {}
+          this.activeClient = null;
+        }
+        for (const client of this.wss.clients) {
+          try {
+            client.terminate();
+          } catch {}
+        }
         this.wss.close(() => {
           this.wss = null;
-          this.activeClient = null;
           resolve();
         });
       } else {

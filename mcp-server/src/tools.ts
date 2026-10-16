@@ -165,6 +165,59 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
     }
   );
 
+  // 5b. browser_close_tabs
+  server.tool(
+    'browser_close_tabs',
+    'Close multiple browser tabs atomically in one call by an array of tabIds or a regex match pattern on title or URL.',
+    {
+      tabIds: z.array(z.number()).optional().describe('Array of tab IDs to close'),
+      match: z.string().optional().describe('Regex or substring pattern to match against tab URL or title')
+    },
+    async ({ tabIds, match }) => {
+      try {
+        let result: any;
+        try {
+          result = await hub.dispatch('close_tabs', { tabIds, match });
+        } catch (dispatchErr: any) {
+          // Graceful fallback if extension has not reloaded yet
+          if (dispatchErr.message?.includes('Unsupported action: close_tabs')) {
+            let idsToClose = tabIds || [];
+            if (match) {
+              const allTabs: any[] = await hub.dispatch('list_tabs', {});
+              const regex = new RegExp(match, 'i');
+              idsToClose = allTabs
+                .filter((t) => regex.test(t.url || '') || regex.test(t.title || ''))
+                .map((t) => t.id);
+            }
+            let closed = 0;
+            for (const id of idsToClose) {
+              try {
+                await hub.dispatch('close_tab', { tabId: id });
+                closed++;
+              } catch {}
+            }
+            result = { ok: true, closedCount: closed, message: `Successfully closed ${closed} tab(s) via fallback.` };
+          } else {
+            throw dispatchErr;
+          }
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: result.message || `Closed ${result.closedCount ?? 0} tab(s).`
+            }
+          ]
+        };
+      } catch (err: any) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to close tabs: ${err.message}` }]
+        };
+      }
+    }
+  );
+
   // 6. browser_read_page
   server.tool(
     'browser_read_page',
