@@ -15,6 +15,7 @@ export type BrowserActionType =
   | 'navigate'
   | 'switch_tab'
   | 'close_tab'
+  | 'close_tabs'
   | 'read_page'
   | 'click'
   | 'type'

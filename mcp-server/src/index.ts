@@ -71,6 +71,12 @@ async function main() {
 
     // Direct RPC Dispatch endpoint for stdio-bridge or HTTP clients
     if (parsedUrl.pathname === '/api/dispatch' && req.method === 'POST') {
+      if (!hub.authenticate(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Unauthorized: Invalid or missing secret token' }));
+        return;
+      }
+
       let body = '';
       req.on('data', (chunk) => (body += chunk));
       req.on('end', async () => {
@@ -87,9 +93,14 @@ async function main() {
       return;
     }
 
-
     // MCP SSE connection endpoint
     if (parsedUrl.pathname === '/sse') {
+      if (!hub.authenticate(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized: Invalid or missing secret token' }));
+        return;
+      }
+
       console.error('[MCP SSE] Client initiating SSE connection...');
       const sseTransport = new SSEServerTransport('/message', res);
       sseTransports.set(sseTransport.sessionId, sseTransport);
@@ -106,6 +117,12 @@ async function main() {
 
     // MCP POST message endpoint
     if (parsedUrl.pathname === '/message' && req.method === 'POST') {
+      if (!hub.authenticate(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized: Invalid or missing secret token' }));
+        return;
+      }
+
       const sessionId = parsedUrl.searchParams.get('sessionId');
       if (!sessionId || !sseTransports.has(sessionId)) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -161,8 +178,21 @@ async function main() {
   // Graceful shutdown handling
   const shutdown = async () => {
     console.error('\n🛑 Shutting down BrowserPilot...');
-    await hub.stop();
-    httpServer.close(() => process.exit(0));
+    const forceExitTimer = setTimeout(() => process.exit(0), 1500);
+    forceExitTimer.unref();
+
+    try {
+      await hub.stop();
+      if (typeof httpServer.closeAllConnections === 'function') {
+        httpServer.closeAllConnections();
+      }
+      httpServer.close(() => {
+        clearTimeout(forceExitTimer);
+        process.exit(0);
+      });
+    } catch {
+      process.exit(0);
+    }
   };
 
   process.on('SIGINT', shutdown);

@@ -70,6 +70,13 @@ if (chrome.webRequest) {
     { urls: ['<all_urls>'] }
   );
 
+  chrome.webRequest.onBeforeRedirect.addListener(
+    (details) => {
+      trackRequestEnd(details.tabId, details.requestId);
+    },
+    { urls: ['<all_urls>'] }
+  );
+
   chrome.webRequest.onCompleted.addListener(
     (details) => {
       trackRequestEnd(details.tabId, details.requestId);
@@ -84,6 +91,13 @@ if (chrome.webRequest) {
     { urls: ['<all_urls>'] }
   );
 }
+
+// Reset active requests on tab navigation to prevent stale network idle hangs
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') {
+    activeRequestsByTab.delete(tabId);
+  }
+});
 
 // --- Hybrid Privacy & Tab Permission Engine ---
 let privacyMode = 'hybrid'; // 'hybrid' | 'full' | 'sandbox'
@@ -229,7 +243,9 @@ async function checkCommandPermission(action, params = {}) {
     'set_clipboard',
     'list_downloads',
     'wait_for_download',
-    'switch_tab'
+    'switch_tab',
+    'close_tab',
+    'close_tabs'
   ].includes(action)) {
     return;
   }
@@ -272,9 +288,17 @@ async function checkCommandPermission(action, params = {}) {
   );
 }
 
+function isInternalExtensionContext(sender) {
+  return Boolean(sender && !sender.tab && sender.id === chrome.runtime.id);
+}
+
 // Update extension badge on status change
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'CONNECTION_STATUS_UPDATE') {
+    if (!isInternalExtensionContext(sender)) {
+      sendResponse({ error: 'Unauthorized' });
+      return false;
+    }
     if (msg.status === 'connected') {
       chrome.action.setBadgeText({ text: 'ON' });
       chrome.action.setBadgeBackgroundColor({ color: '#10b981' }); // Green
@@ -289,6 +313,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'OFFSCREEN_DOCUMENT_READY') {
+    if (!isInternalExtensionContext(sender)) {
+      sendResponse({ error: 'Unauthorized' });
+      return false;
+    }
     chrome.storage.local.get(['wsUrl', 'secretToken', 'autoConnect'], (data) => {
       if (data.autoConnect !== false && data.wsUrl) {
         chrome.runtime.sendMessage({
@@ -302,6 +330,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'GET_CONNECTION_CONFIG') {
+    if (!isInternalExtensionContext(sender)) {
+      sendResponse({ error: 'Unauthorized' });
+      return false;
+    }
     chrome.storage.local.get(['wsUrl', 'secretToken', 'autoConnect'], (data) => {
       sendResponse(data);
     });
@@ -309,6 +341,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'GET_PRIVACY_STATE') {
+    if (!isInternalExtensionContext(sender)) {
+      sendResponse({ error: 'Unauthorized' });
+      return false;
+    }
     sendResponse({
       privacyMode,
       approvedUserTabs: Array.from(approvedUserTabs),
@@ -318,6 +354,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'SET_PRIVACY_MODE') {
+    if (!isInternalExtensionContext(sender)) {
+      sendResponse({ ok: false, error: 'Unauthorized' });
+      return false;
+    }
     if (['hybrid', 'full', 'sandbox'].includes(msg.privacyMode)) {
       privacyMode = msg.privacyMode;
       savePrivacyState();
@@ -327,6 +367,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'APPROVE_TAB') {
+    if (!isInternalExtensionContext(sender)) {
+      sendResponse({ ok: false, error: 'Unauthorized' });
+      return false;
+    }
     approveTabAccess(msg.tabId);
     if (pendingPermissionRequests.has(msg.tabId)) {
       const cb = pendingPermissionRequests.get(msg.tabId);
@@ -338,6 +382,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'REVOKE_TAB') {
+    if (!isInternalExtensionContext(sender)) {
+      sendResponse({ ok: false, error: 'Unauthorized' });
+      return false;
+    }
     revokeTabAccess(msg.tabId);
     if (pendingPermissionRequests.has(msg.tabId)) {
       const cb = pendingPermissionRequests.get(msg.tabId);
@@ -349,27 +397,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'TAB_PERMISSION_RESPONSE') {
-    const tabId = sender.tab ? sender.tab.id : msg.tabId;
-    if (tabId) {
-      if (msg.approved) {
-        approveTabAccess(tabId);
-      } else {
-        revokeTabAccess(tabId);
-      }
-      if (pendingPermissionRequests.has(tabId)) {
-        const cb = pendingPermissionRequests.get(tabId);
-        pendingPermissionRequests.delete(tabId);
-        cb(Boolean(msg.approved));
-      }
+    const tabId = sender.tab ? sender.tab.id : null;
+    if (!tabId || sender.id !== chrome.runtime.id) {
+      sendResponse({ ok: false, error: 'Unauthorized: TAB_PERMISSION_RESPONSE must originate from sender.tab' });
+      return false;
+    }
+    if (msg.approved) {
+      approveTabAccess(tabId);
+    } else {
+      revokeTabAccess(tabId);
+    }
+    if (pendingPermissionRequests.has(tabId)) {
+      const cb = pendingPermissionRequests.get(tabId);
+      pendingPermissionRequests.delete(tabId);
+      cb(Boolean(msg.approved));
     }
     sendResponse({ ok: true });
     return false;
   }
 });
 
-// 2. Command Execution Router (dispatched from offscreen.js)
+// 2. Command Execution Router (dispatched exclusively from offscreen.js)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type !== 'EXECUTE_COMMAND') return;
+
+  if (!isInternalExtensionContext(sender)) {
+    console.warn('[BrowserPilot Background] Rejected unauthorized EXECUTE_COMMAND from non-internal sender:', sender);
+    sendResponse({ success: false, error: 'Unauthorized: EXECUTE_COMMAND only permitted from internal extension context.' });
+    return false;
+  }
 
   const { command } = request;
   handleCommand(command.action, command.params)
@@ -396,6 +452,8 @@ async function handleCommand(action, params = {}) {
       return switchTab(params);
     case 'close_tab':
       return closeTab(params);
+    case 'close_tabs':
+      return closeMultipleTabs(params);
     case 'reload_extension':
       setTimeout(() => chrome.runtime.reload(), 100);
       return { ok: true, message: 'Reloading extension...' };
@@ -513,9 +571,44 @@ async function closeTab({ tabId }) {
   return { ok: true, closedTabId: targetId };
 }
 
-async function captureScreenshot({ tabId }) {
+async function closeMultipleTabs({ tabIds, match } = {}) {
+  let idsToClose = [];
+  if (Array.isArray(tabIds) && tabIds.length > 0) {
+    idsToClose = tabIds;
+  } else if (match) {
+    const allTabs = await chrome.tabs.query({});
+    let regex;
+    try {
+      regex = new RegExp(match, 'i');
+    } catch {
+      regex = new RegExp(match.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    }
+    idsToClose = allTabs
+      .filter((t) => regex.test(t.url || '') || regex.test(t.title || ''))
+      .map((t) => t.id);
+  }
+
+  if (idsToClose.length === 0) {
+    return { ok: true, closedCount: 0, closedTabIds: [], message: 'No matching tabs found to close.' };
+  }
+
+  await chrome.tabs.remove(idsToClose);
+  idsToClose.forEach((id) => revokeTabAccess(id));
+  return {
+    ok: true,
+    closedCount: idsToClose.length,
+    closedTabIds: idsToClose,
+    message: `Successfully closed ${idsToClose.length} tab(s).`
+  };
+}
+
+async function captureScreenshot({ tabId, format = 'jpeg', quality = 80 } = {}) {
   const currentTab = await getActiveTab().catch(() => null);
   const targetTab = tabId ? await chrome.tabs.get(tabId) : currentTab;
+
+  if (!targetTab) {
+    throw new Error('No target tab found for screenshot');
+  }
 
   let switchedTab = false;
   if (tabId && currentTab && currentTab.id !== tabId) {
@@ -524,12 +617,28 @@ async function captureScreenshot({ tabId }) {
     await new Promise((r) => setTimeout(r, 150));
   }
 
+  // Restore window if minimized to prevent captureVisibleTab errors
+  const win = await chrome.windows.get(targetTab.windowId).catch(() => null);
+  let wasMinimized = false;
+  if (win && win.state === 'minimized') {
+    wasMinimized = true;
+    await chrome.windows.update(targetTab.windowId, { state: 'normal' }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
   let dataUrl;
   try {
-    dataUrl = await chrome.tabs.captureVisibleTab(targetTab.windowId, {
-      format: 'png'
-    });
+    const captureOptions = {
+      format: format === 'png' ? 'png' : 'jpeg'
+    };
+    if (captureOptions.format === 'jpeg') {
+      captureOptions.quality = typeof quality === 'number' ? quality : 80;
+    }
+    dataUrl = await chrome.tabs.captureVisibleTab(targetTab.windowId, captureOptions);
   } finally {
+    if (wasMinimized) {
+      chrome.windows.update(targetTab.windowId, { state: 'minimized' }).catch(() => {});
+    }
     if (switchedTab && currentTab && currentTab.id) {
       await chrome.tabs.update(currentTab.id, { active: true }).catch(() => {});
     }
@@ -696,13 +805,17 @@ async function ensureContentScriptInjected(tabId) {
 }
 
 async function waitForTabLoad(tabId, timeoutMs = 15000) {
-  const initialTab = await chrome.tabs.get(tabId).catch(() => null);
-  if (initialTab && initialTab.status === 'complete') {
-    return;
-  }
-
   return new Promise((resolve) => {
     let timer = null;
+    let checkFallbackTimer = null;
+    let settled = false;
+
+    const cleanup = () => {
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      if (timer) clearTimeout(timer);
+      if (checkFallbackTimer) clearTimeout(checkFallbackTimer);
+    };
 
     const listener = (id, changeInfo) => {
       if (id === tabId && changeInfo.status === 'complete') {
@@ -711,17 +824,22 @@ async function waitForTabLoad(tabId, timeoutMs = 15000) {
       }
     };
 
-    const cleanup = () => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      if (timer) clearTimeout(timer);
-    };
+    chrome.tabs.onUpdated.addListener(listener);
+
+    // Fallback check after 350ms in case tab was already complete and never transitioned through loading
+    checkFallbackTimer = setTimeout(async () => {
+      if (settled) return;
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (tab && tab.status === 'complete') {
+        cleanup();
+        resolve();
+      }
+    }, 350);
 
     timer = setTimeout(() => {
       cleanup();
-      resolve(); // Resolve anyway on timeout
+      resolve(); // Resolve on timeout to avoid hanging indefinitely
     }, timeoutMs);
-
-    chrome.tabs.onUpdated.addListener(listener);
   });
 }
 

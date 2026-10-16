@@ -185,6 +185,11 @@ function notifyStatus(status, message) {
 
 // Listen for commands from Popup or Background
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (!sender || sender.tab || sender.id !== chrome.runtime.id) {
+    sendResponse({ ok: false, error: 'Unauthorized: Offscreen commands only permitted from internal extension context.' });
+    return false;
+  }
+
   if (request.type === 'CONNECT_WEBSOCKET') {
     connect(request.wsUrl, request.secretToken);
     sendResponse({ ok: true });

@@ -174,7 +174,11 @@
     btnDeny.onmouseover = () => (btnDeny.style.background = '#475569');
     btnDeny.onmouseout = () => (btnDeny.style.background = '#334155');
 
-    btnAllow.onclick = () => {
+    btnAllow.onclick = (e) => {
+      if (!e.isTrusted) {
+        console.warn('[BrowserPilot Security] Synthetic click on permission banner rejected.');
+        return;
+      }
       chrome.runtime.sendMessage({ type: 'TAB_PERMISSION_RESPONSE', approved: true }).catch(() => {});
       title.innerHTML = '<span style="color: #10b981;">✓ Permission Granted</span>';
       desc.textContent = 'AI Agent can now interact with this tab.';
@@ -183,7 +187,8 @@
       setTimeout(clearPermissionBanner, 1500);
     };
 
-    btnDeny.onclick = () => {
+    btnDeny.onclick = (e) => {
+      if (!e.isTrusted) return;
       chrome.runtime.sendMessage({ type: 'TAB_PERMISSION_RESPONSE', approved: false }).catch(() => {});
       clearPermissionBanner();
     };
@@ -353,14 +358,18 @@
   function convertDomToMarkdown(rootNode, maxLength) {
     if (!rootNode) return '';
     const lines = [];
+    let currentLength = 0;
 
     function traverse(node) {
       if (!node) return;
-      if (lines.join('\n').length >= maxLength) return;
+      if (currentLength >= maxLength) return;
 
       if (node.nodeType === Node.TEXT_NODE) {
         const text = node.textContent.trim().replace(/\s+/g, ' ');
-        if (text) lines.push(text);
+        if (text) {
+          lines.push(text);
+          currentLength += text.length + 1;
+        }
         return;
       }
 
@@ -466,8 +475,8 @@
     await new Promise((r) => setTimeout(r, 150));
 
     const rect = el.getBoundingClientRect();
-    const clientX = rect.left + rect.width / 2;
-    const clientY = rect.top + rect.height / 2;
+    const clientX = typeof x === 'number' ? x : rect.left + rect.width / 2;
+    const clientY = typeof y === 'number' ? y : rect.top + rect.height / 2;
 
     if (humanize) {
       await simulateHumanMouseTrajectory(clientX, clientY);
@@ -505,8 +514,9 @@
     // Wait 300ms for UI / menus / animations to open
     await new Promise((r) => setTimeout(r, 300));
 
+    const classStr = typeof el.className === 'string' ? el.className : (el.className?.baseVal || '');
     return {
-      description: `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className ? '.' + el.className.split(' ')[0] : ''} ("${(el.innerText || el.value || '').slice(0, 40)}")`
+      description: `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${classStr ? '.' + classStr.split(' ')[0] : ''} ("${(el.innerText || el.value || '').slice(0, 40)}")`
     };
   }
 

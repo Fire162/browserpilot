@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-10-16 21:10 IST
+
+### Security
+* Enforced `isInternalExtensionContext(sender)` verification in `background.js` and `offscreen.js` across all privileged message channels (`GET_CONNECTION_CONFIG`, `SET_PRIVACY_MODE`, `APPROVE_TAB`, `REVOKE_TAB`, `EXECUTE_COMMAND`, `OFFSCREEN_READ_CLIPBOARD`, `OFFSCREEN_WRITE_CLIPBOARD`), preventing untrusted content scripts or web pages from executing unauthorized commands or stealing secret tokens and clipboard contents.
+* Bound `TAB_PERMISSION_RESPONSE` strictly to `sender.tab.id` to prevent cross-tab permission forgery.
+* Added `e.isTrusted` verification on in-page permission banner action clicks in `content.js`, blocking synthetic click bypasses.
+
+### Fixed
+* Fixed coordinate-based clicking in `content.js`: preserved explicit `x` and `y` click coordinates on canvas, interactive maps, and complex viewports instead of overwriting with element center coordinates.
+* Fixed SVG element click crash in `content.js`: safely handled `SVGAnimatedString` on `el.className` when generating action descriptions.
+* Fixed premature return in `waitForTabLoad` (`background.js`): eliminated instant resolution caused by stale `'complete'` tab status before a newly triggered navigation had initiated.
+* Fixed memory and request leaks in network tracking (`background.js`): added `chrome.webRequest.onBeforeRedirect` tracking and flushed tab requests on `changeInfo.status === 'loading'`, preventing `browser_wait_for_network_idle` from timing out on redirects.
+* Fixed daemon shutdown hang: terminated active WebSocket clients on `hub.stop()` and force-closed HTTP connections, enabling instantaneous daemon restarts.
+
+### Changed
+* Optimized tab screenshots to use JPEG compression (quality 80) by default, reducing payload sizes by ~95% (from ~8MB down to ~500KB) and eliminating socket transfer latency and V8 heap churn.
+* Handled minimized browser window states in `captureScreenshot`, restoring normal window state temporarily to avoid `captureVisibleTab` failures.
+
+## [1.4.0] - 2026-10-16 20:20 IST
+
+### Added
+* Standalone `bp` CLI tool (`browserpilot`) built with Node.js standard library for fast terminal diagnostics, health checks, tab management, and automation.
+* `bp doctor` diagnostic command that verifies Node.js runtime, daemon service state, listening ports, reverse-proxy tunnel health, extension WebSocket connection, and RPC roundtrip ping latency.
+* `browser_close_tabs`: 22nd MCP tool supporting atomic batch closing of tabs by ID array or regex/string URL/title match.
+* Zero-dependency `DaemonClient` with intelligent network sandbox fallback (probes local loopback, Fire PM tunnel descriptor `/tmp/fire-tunnels/8770.env`, and container gateways).
+
+### Fixed
+* Prevented `PERMISSION_REQUIRED` errors on routine tab cleanup commands (`close_tab`, `close_tabs`) in default Hybrid privacy mode.
+* Resolved `ECONNREFUSED` connection failures inside WireGuard proxies and network namespace sandboxes.
+
+### Security
+* Hardened HTTP endpoints (`/api/dispatch`, `/sse`, `/message`) by enforcing mandatory `SECRET_TOKEN` validation, blocking unauthorized public tunnel access with `401 Unauthorized`.
+
 ## [1.3.0] - 2026-09-20 12:10 IST
 
 ### Added
