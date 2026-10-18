@@ -53,11 +53,33 @@ body {
   font-size: 20px;
 }
 
+.brand-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .brand-text h1 {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: #ffffff;
+}
+
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 0.15s ease, transform 0.15s ease;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.github-link:hover {
+  color: #ffffff;
+  transform: scale(1.1);
 }
 
 .subtitle {

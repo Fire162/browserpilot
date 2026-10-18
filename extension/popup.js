@@ -279,4 +279,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       bridgeMessage.textContent = message;
     }
   }
+
+  // Handle external links reliably within extension popup
+  document.querySelectorAll('a[target="_blank"]').forEach((link) => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const href = link.getAttribute('href');
+      if (href) {
+        chrome.tabs.create({ url: href });
+      }
+    });
+  });
 });
