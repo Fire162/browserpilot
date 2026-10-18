@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
+import readline from 'readline';
+import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 import { DaemonClient } from './daemon-client.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const client = new DaemonClient();
 
@@ -11,11 +17,15 @@ const colors = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
   dim: '\x1b[2m',
+  underline: '\x1b[4m',
   green: '\x1b[32m',
   yellow: '\x1b[33m',
   red: '\x1b[31m',
   cyan: '\x1b[36m',
-  magenta: '\x1b[35m'
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  bgCyan: '\x1b[46m',
+  bgBlue: '\x1b[44m'
 };
 
 function formatHeader(title: string) {
@@ -31,6 +41,10 @@ ${colors.bold}USAGE:${colors.reset}
   bp <command> [options]
 
 ${colors.bold}COMMANDS:${colors.reset}
+  ${colors.green}start [options]${colors.reset}         Start BrowserPilot daemon (${colors.dim}--port=<n> --tunnel${colors.reset})
+  ${colors.green}stop${colors.reset}                    Stop BrowserPilot daemon and close tunnels
+  ${colors.green}restart [options]${colors.reset}       Restart daemon and refresh tunnel
+  ${colors.green}logs [-f]${colors.reset}               View daemon service logs
   ${colors.green}doctor${colors.reset}                  Run end-to-end environment & connectivity diagnostics
   ${colors.green}status${colors.reset}                  Show current bridge, extension, and active tab status
   ${colors.green}tabs [list]${colors.reset}             List open browser tabs (${colors.dim}--filter=<keyword>${colors.reset})
@@ -41,12 +55,14 @@ ${colors.bold}COMMANDS:${colors.reset}
   ${colors.green}help${colors.reset}                    Show this help message
 
 ${colors.bold}EXAMPLES:${colors.reset}
+  bp start --tunnel
+  bp start --port=8770 --tunnel
+  bp stop
+  bp restart --tunnel
+  bp logs -f
   bp doctor
   bp status
   bp tabs list
-  bp tabs list --filter=youtube
-  bp tabs close 1488399560 1488399570
-  bp tabs close --match="youtube.com/@"
   bp nav https://github.com --new-tab
   bp snap /tmp/screenshot.png
   bp tunnel url
@@ -320,13 +336,344 @@ async function runSnap(outputFile?: string) {
   }
 }
 
-async function runTunnel(action?: string) {
-  const tunnelFile = `/tmp/fire-tunnels/8770.env`;
+function askQuestion(query: string): Promise<string> {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  return new Promise((resolve) => {
+    rl.question(query, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+function resolveEnvFilePath(): string {
+  // Check local project .env, else check ~/.browserpilot/.env
+  const localEnv = path.resolve(__dirname, '..', '.env');
+  if (fs.existsSync(localEnv)) return localEnv;
+
+  const projectRootEnv = path.resolve(__dirname, '..', '..', '.env');
+  if (fs.existsSync(projectRootEnv)) return projectRootEnv;
+
+  const userConfigDir = path.join(process.env.HOME || '/root', '.browserpilot');
+  if (!fs.existsSync(userConfigDir)) {
+    try { fs.mkdirSync(userConfigDir, { recursive: true }); } catch {}
+  }
+  return path.join(userConfigDir, '.env');
+}
+
+async function ensureSecretToken(interactive = true): Promise<string> {
+  const envPath = resolveEnvFilePath();
+  let existingToken = '';
+
+  if (fs.existsSync(envPath)) {
+    try {
+      const content = fs.readFileSync(envPath, 'utf8');
+      const m = content.match(/^SECRET_TOKEN=(.+)$/m);
+      if (m && m[1]) {
+        existingToken = m[1].trim();
+      }
+    } catch {}
+  }
+
+  if (existingToken && existingToken !== 'browserpilot-secret') {
+    return existingToken;
+  }
+
+  console.log(`\n${colors.bold}${colors.cyan}[1/3] Security Check${colors.reset}`);
+
+  let tokenToUse = '';
+  if (interactive && process.stdin.isTTY) {
+    console.log(`  ${colors.dim}No custom secret authentication token found.${colors.reset}`);
+    console.log(`  ${colors.dim}A token prevents unauthorized access to your browser bridge.${colors.reset}\n`);
+
+    const input = await askQuestion(
+      `  ${colors.bold}Enter secret token${colors.reset} ${colors.dim}[press Enter to auto-generate secure token]:${colors.reset} `
+    );
+    if (input) {
+      tokenToUse = input;
+    }
+  }
+
+  if (!tokenToUse) {
+    tokenToUse = `bp_${crypto.randomBytes(12).toString('hex')}`;
+    console.log(`  ${colors.green}✔${colors.reset} Generated secure token: ${colors.bold}${colors.green}${tokenToUse}${colors.reset}`);
+  } else {
+    console.log(`  ${colors.green}✔${colors.reset} Using provided token: ${colors.bold}${colors.green}${tokenToUse}${colors.reset}`);
+  }
+
+  // Save to .env file
+  try {
+    let currentContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+    if (currentContent.includes('SECRET_TOKEN=')) {
+      currentContent = currentContent.replace(/^SECRET_TOKEN=.*$/m, `SECRET_TOKEN=${tokenToUse}`);
+    } else {
+      currentContent += `\nSECRET_TOKEN=${tokenToUse}\n`;
+    }
+    fs.writeFileSync(envPath, currentContent.trim() + '\n', 'utf8');
+    console.log(`  ${colors.dim}Saved to ${envPath}${colors.reset}`);
+  } catch (err: any) {
+    console.log(`  ${colors.yellow}⚠ Could not write token to ${envPath}: ${err.message}${colors.reset}`);
+  }
+
+  return tokenToUse;
+}
+
+function detectPublicIp(): string {
+  try {
+    const ip = execSync('curl -sS --max-time 3 https://api.ipify.org || curl -sS --max-time 3 https://ifconfig.me', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    if (ip && /^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
+      return ip;
+    }
+  } catch {}
+  return 'YOUR_VPS_IP';
+}
+
+async function runStart(args: string[]) {
+  let port = '8770';
+  let shouldOpenTunnel = false;
+  let forceFire = false;
+  let noFire = false;
+
+  for (const a of args) {
+    if (a.startsWith('--port=')) {
+      port = a.slice(7);
+    } else if (a === '--tunnel') {
+      shouldOpenTunnel = true;
+    } else if (a === '--fire') {
+      forceFire = true;
+    } else if (a === '--no-fire') {
+      noFire = true;
+    }
+  }
+
+  console.log(`\n${colors.bold}${colors.cyan}══════════════════════════════════════════════════════════════${colors.reset}`);
+  console.log(`  ${colors.bold}${colors.cyan}🚀 BrowserPilot Activation & Startup${colors.reset}`);
+  console.log(`${colors.bold}${colors.cyan}══════════════════════════════════════════════════════════════${colors.reset}`);
+
+  // 1. Ensure security secret token
+  const token = await ensureSecretToken(!args.includes('--quiet'));
+
+  // 2. Process Manager & Tunnel Check
+  console.log(`\n${colors.bold}${colors.cyan}[2/3] Process & Tunnel Manager${colors.reset}`);
+
+  let hasFirePm = false;
+  try {
+    execSync('which fire', { stdio: 'ignore' });
+    hasFirePm = true;
+  } catch {}
+
+  if (!hasFirePm && !noFire) {
+    console.log(`  ${colors.yellow}Fire PM was not found on your system.${colors.reset}`);
+    console.log(`  Fire PM provides background process management and free reverse proxy tunnels.`);
+    console.log(`  ${colors.bold}GitHub Repository:${colors.reset} ${colors.underline}${colors.blue}https://github.com/Fire-Package/fire-pm${colors.reset}\n`);
+
+    let installFire = forceFire;
+    if (!installFire && process.stdin.isTTY) {
+      const ans = await askQuestion(
+        `  ${colors.bold}Would you like to install Fire PM now?${colors.reset} ${colors.dim}[y/N]:${colors.reset} `
+      );
+      if (ans.toLowerCase() === 'y' || ans.toLowerCase() === 'yes') {
+        installFire = true;
+      }
+    }
+
+    if (installFire) {
+      console.log(`\n  ${colors.cyan}Installing Fire PM via official installer...${colors.reset}`);
+      try {
+        execSync('curl -fsSL https://raw.githubusercontent.com/Fire-Package/fire-pm/main/install.sh | sudo bash', {
+          stdio: 'inherit'
+        });
+        hasFirePm = true;
+        console.log(`  ${colors.green}✔ Fire PM installed successfully!${colors.reset}\n`);
+      } catch (err: any) {
+        console.log(`  ${colors.yellow}⚠ Fire PM install failed (${err.message}). Continuing in standalone mode...${colors.reset}\n`);
+      }
+    } else {
+      console.log(`  ${colors.dim}Continuing in standalone mode without Fire PM.${colors.reset}\n`);
+    }
+  }
+
+  // 3. Launch Daemon
+  console.log(`${colors.bold}${colors.cyan}[3/3] Starting Daemon on port ${port}...${colors.reset}`);
+
+  const userDir = path.join(process.env.HOME || '/root', '.browserpilot');
+  if (!fs.existsSync(userDir)) {
+    try { fs.mkdirSync(userDir, { recursive: true }); } catch {}
+  }
+  const pidFile = path.join(userDir, 'daemon.pid');
+  const logFile = path.join(userDir, 'daemon.log');
+
+  let started = false;
+
+  // Attempt 1: Fire PM
+  if (hasFirePm) {
+    try {
+      execSync('fire start browserpilot', { stdio: 'pipe' });
+      started = true;
+      console.log(`  ${colors.green}✔${colors.reset} Started via Fire PM (${colors.bold}fire-browserpilot${colors.reset})`);
+    } catch {
+      // Fire PM might not have registered it yet, try systemctl if available
+    }
+  }
+
+  // Attempt 2: Systemd
+  if (!started) {
+    try {
+      execSync('systemctl start fire-browserpilot', { stdio: 'pipe' });
+      started = true;
+      console.log(`  ${colors.green}✔${colors.reset} Started via systemd (${colors.bold}fire-browserpilot.service${colors.reset})`);
+    } catch {}
+  }
+
+  // Attempt 3: Standalone background node process
+  if (!started) {
+    const distIndex = path.resolve(__dirname, 'index.js');
+    const envPrefix = `PORT=${port} WS_PORT=${port} SECRET_TOKEN=${token}`;
+    try {
+      execSync(`nohup sh -c "${envPrefix} node ${distIndex}" > ${logFile} 2>&1 & echo $! > ${pidFile}`, {
+        stdio: 'ignore'
+      });
+      started = true;
+      const pid = fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf8').trim() : 'active';
+      console.log(`  ${colors.green}✔${colors.reset} Started standalone background process (${colors.bold}PID: ${pid}${colors.reset})`);
+      console.log(`  ${colors.dim}Logs written to: ${logFile}${colors.reset}`);
+    } catch (e: any) {
+      console.error(`  ${colors.red}✖ Failed to start daemon:${colors.reset} ${e.message}`);
+      process.exit(1);
+    }
+  }
+
+  // Tunnel handling
+  let tunnelUrl = '';
+  if (shouldOpenTunnel || hasFirePm) {
+    try {
+      if (shouldOpenTunnel) {
+        console.log(`\n  ${colors.dim}Opening reverse proxy tunnel on port ${port}...${colors.reset}`);
+        execSync(`fire tunnel open ${port}`, { stdio: 'pipe' });
+      }
+      const tunnelEnv = `/tmp/fire-tunnels/${port}.env`;
+      if (fs.existsSync(tunnelEnv)) {
+        const content = fs.readFileSync(tunnelEnv, 'utf8');
+        const m = content.match(/URL=(https?:\/\/[^\s]+)/);
+        if (m && m[1]) tunnelUrl = m[1];
+      }
+    } catch {}
+  }
+
+  const publicIp = detectPublicIp();
+
+  // Print Beautiful Connection Summary
+  console.log(`\n${colors.bold}${colors.green}══════════════════════════════════════════════════════════════${colors.reset}`);
+  console.log(`  ${colors.bold}${colors.green}✔ BrowserPilot Daemon is ONLINE!${colors.reset}`);
+  console.log(`${colors.bold}${colors.green}══════════════════════════════════════════════════════════════${colors.reset}\n`);
+
+  console.log(`  ${colors.bold}How to connect your Browser Extension:${colors.reset}`);
+  console.log(`  ${colors.dim}1. Click the BrowserPilot extension icon in Edge / Chrome / Brave${colors.reset}`);
+  console.log(`  ${colors.dim}2. Paste your WebSocket URL below & click "Connect":${colors.reset}\n`);
+
+  if (tunnelUrl) {
+    const wsTunnel = `wss://${tunnelUrl.replace(/^https?:\/\//, '')}?token=${token}`;
+    console.log(`  ${colors.bold}${colors.cyan}● Secure Tunnel URL (Recommended):${colors.reset}`);
+    console.log(`    ${colors.bold}${colors.green}${wsTunnel}${colors.reset}\n`);
+  } else {
+    console.log(`  ${colors.bold}${colors.cyan}● Direct IP Connection:${colors.reset}`);
+    console.log(`    ${colors.bold}${colors.green}ws://${publicIp}:${port}?token=${token}${colors.reset}\n`);
+    console.log(`  ${colors.bold}${colors.cyan}● Local Loopback (same machine):${colors.reset}`);
+    console.log(`    ${colors.bold}${colors.green}ws://127.0.0.1:${port}?token=${token}${colors.reset}\n`);
+  }
+
+  console.log(`  ${colors.bold}Authentication Token:${colors.reset} ${colors.yellow}${token}${colors.reset}`);
+  console.log(`  ${colors.bold}Status Check:${colors.reset}         ${colors.dim}Run ${colors.bold}bp status${colors.reset} or ${colors.bold}bp doctor${colors.reset}\n`);
+
+  if (!tunnelUrl) {
+    console.log(`  ${colors.dim}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${colors.reset}`);
+    console.log(`  ${colors.bold}${colors.yellow}Firewall & Tunnel Guidance:${colors.reset}`);
+    console.log(`  ${colors.dim}• Direct VPS IP:${colors.reset} Ensure port ${port} is open: ${colors.cyan}sudo ufw allow ${port}/tcp${colors.reset}`);
+    console.log(`  ${colors.dim}• SSH Tunnel:${colors.reset}   Forward from local machine: ${colors.cyan}ssh -N -R ${port}:localhost:${port} user@${publicIp}${colors.reset}`);
+    console.log(`  ${colors.dim}• Free Tunnel:${colors.reset}  Run ${colors.bold}bp tunnel open${colors.reset} or use Cloudflare / ngrok${colors.reset}`);
+    console.log(`  ${colors.dim}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${colors.reset}\n`);
+  }
+}
+
+async function runStop() {
+  console.log(`\n${colors.bold}Stopping BrowserPilot Daemon...${colors.reset}`);
+
+  // 1. Try Fire PM
+  try {
+    execSync('fire stop browserpilot', { stdio: 'pipe' });
+    console.log(`  ${colors.green}✔${colors.reset} Stopped service via Fire PM`);
+  } catch {}
+
+  // 2. Try Systemd
+  try {
+    execSync('systemctl stop fire-browserpilot', { stdio: 'pipe' });
+    console.log(`  ${colors.green}✔${colors.reset} Stopped systemd service`);
+  } catch {}
+
+  // 3. Try PID file
+  const pidFile = path.join(process.env.HOME || '/root', '.browserpilot', 'daemon.pid');
+  if (fs.existsSync(pidFile)) {
+    try {
+      const pid = fs.readFileSync(pidFile, 'utf8').trim();
+      if (pid) {
+        process.kill(Number(pid), 'SIGTERM');
+        fs.unlinkSync(pidFile);
+        console.log(`  ${colors.green}✔${colors.reset} Stopped standalone process (PID: ${pid})`);
+      }
+    } catch {}
+  }
+
+  // 4. Fallback pkill
+  try {
+    execSync("pkill -f 'browserpilot/mcp-server/dist/index.js' || true", { stdio: 'pipe' });
+  } catch {}
+
+  console.log(`\n${colors.green}✔ BrowserPilot daemon stopped.${colors.reset}\n`);
+}
+
+async function runRestart(args: string[]) {
+  await runStop();
+  await runStart(args);
+}
+
+async function runLogs(isFollow: boolean) {
+  const flag = isFollow ? '-f' : '-n 50';
+
+  // Check systemd first
+  try {
+    const isSys = execSync('systemctl is-active fire-browserpilot 2>/dev/null', { encoding: 'utf8' }).trim();
+    if (isSys === 'active' || isSys === 'failed') {
+      execSync(`journalctl -u fire-browserpilot ${flag} --no-pager`, { stdio: 'inherit' });
+      return;
+    }
+  } catch {}
+
+  // Check standalone log file
+  const logFile = path.join(process.env.HOME || '/root', '.browserpilot', 'daemon.log');
+  const tempLog = '/tmp/browserpilot.log';
+
+  if (fs.existsSync(logFile)) {
+    execSync(`tail ${flag} ${logFile}`, { stdio: 'inherit' });
+  } else if (fs.existsSync(tempLog)) {
+    execSync(`tail ${flag} ${tempLog}`, { stdio: 'inherit' });
+  } else {
+    console.log(`\n${colors.yellow}No active daemon log files found.${colors.reset}\n`);
+  }
+}
+
+async function runTunnel(action?: string, port = '8770') {
+  const tunnelFile = `/tmp/fire-tunnels/${port}.env`;
 
   if (action === 'open') {
     try {
-      console.log(`${colors.dim}Opening Fire PM tunnel on port 8770...${colors.reset}`);
-      execSync('fire tunnel open 8770', { stdio: 'inherit' });
+      console.log(`${colors.dim}Opening Fire PM tunnel on port ${port}...${colors.reset}`);
+      execSync(`fire tunnel open ${port}`, { stdio: 'inherit' });
     } catch (e: any) {
       console.error(`${colors.red}Failed to open tunnel:${colors.reset} ${e.message}`);
     }
@@ -335,8 +682,8 @@ async function runTunnel(action?: string) {
 
   if (action === 'close') {
     try {
-      console.log(`${colors.dim}Closing Fire PM tunnel on port 8770...${colors.reset}`);
-      execSync('fire tunnel close 8770', { stdio: 'inherit' });
+      console.log(`${colors.dim}Closing Fire PM tunnel on port ${port}...${colors.reset}`);
+      execSync(`fire tunnel close ${port}`, { stdio: 'inherit' });
     } catch (e: any) {
       console.error(`${colors.red}Failed to close tunnel:${colors.reset} ${e.message}`);
     }
@@ -356,7 +703,7 @@ async function runTunnel(action?: string) {
     } catch {}
   }
 
-  console.log(`\n${colors.yellow}No active tunnel found for port 8770.${colors.reset} Run ${colors.bold}bp tunnel open${colors.reset} to create one.\n`);
+  console.log(`\n${colors.yellow}No active tunnel found for port ${port}.${colors.reset} Run ${colors.bold}bp tunnel open${colors.reset} to create one.\n`);
 }
 
 async function main() {
@@ -364,6 +711,19 @@ async function main() {
   const command = args[0] || 'help';
 
   switch (command) {
+    case 'start':
+    case 'activate':
+      await runStart(args.slice(1));
+      break;
+    case 'stop':
+      await runStop();
+      break;
+    case 'restart':
+      await runRestart(args.slice(1));
+      break;
+    case 'logs':
+      await runLogs(args.includes('-f') || args.includes('--follow'));
+      break;
     case 'doctor':
       await runDoctor();
       break;
