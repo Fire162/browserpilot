@@ -49,15 +49,26 @@ ${colors.bold}COMMANDS:${colors.reset}
   ${colors.green}status${colors.reset}                  Show current bridge, extension, and active tab status
   ${colors.green}tabs [list]${colors.reset}             List open browser tabs (${colors.dim}--filter=<keyword>${colors.reset})
   ${colors.green}tabs close <ids...>${colors.reset}     Close one or more tabs by ID (${colors.dim}--match=<pattern>${colors.reset})
-  ${colors.green}nav <url>${colors.reset}               Navigate active tab to URL (${colors.dim}--new-tab${colors.reset})
-  ${colors.green}snap [file.png]${colors.reset}         Take screenshot of active tab and save to disk
+  ${colors.green}switch <tabId>${colors.reset}          Bring tab to foreground
+  ${colors.green}nav <url>${colors.reset}               Navigate tab to URL (${colors.dim}--new-tab --tab=<id>${colors.reset})
+  ${colors.green}read${colors.reset}                    Inspect page elements (${colors.dim}--interactive --tab=<id>${colors.reset})
+  ${colors.green}click <target>${colors.reset}          Click element by selector or text (${colors.dim}--tab=<id>${colors.reset})
+  ${colors.green}type <target> <text>${colors.reset}    Type text into input/textarea (${colors.dim}--tab=<id>${colors.reset})
+  ${colors.green}eval <code>${colors.reset}              Evaluate JavaScript expression in tab (${colors.dim}--tab=<id>${colors.reset})
+  ${colors.green}scroll [dir]${colors.reset}             Scroll page (${colors.dim}up|down|top|bottom --tab=<id>${colors.reset})
+  ${colors.green}snap [file.png]${colors.reset}         Take screenshot of tab and save to disk (${colors.dim}--tab=<id>${colors.reset})
   ${colors.green}tunnel [url|open|close]${colors.reset} Manage/view Fire PM reverse proxy tunnel
   ${colors.green}help${colors.reset}                    Show this help message
 
 ${colors.bold}EXAMPLES:${colors.reset}
-  bp start --tunnel
-  bp start --port=8770 --tunnel
-  bp stop
+  bp tabs
+  bp switch 216370180
+  bp read --interactive --tab=216370180
+  bp click "Save & Continue"
+  bp type "textarea[name='justification']" "Provides browser tab access"
+  bp eval "document.title"
+  bp scroll down
+  bp snap /tmp/partner-center.png
   bp restart --tunnel
   bp logs -f
   bp doctor
@@ -316,10 +327,167 @@ async function runNav(url: string, newTab = false) {
   }
 }
 
-async function runSnap(outputFile?: string) {
+async function runSwitch(tabIdStr: string) {
+  const tabId = parseInt(tabIdStr, 10);
+  if (isNaN(tabId)) {
+    console.error(`\n${colors.red}Error:${colors.reset} Please provide a valid numeric tab ID (e.g. bp switch 216370180)\n`);
+    process.exit(1);
+  }
   try {
-    console.log(`${colors.dim}Capturing visible tab screenshot...${colors.reset}`);
-    const res = await client.dispatch('screenshot', {});
+    const res = await client.dispatch('switch_tab', { tabId });
+    console.log(`\n${colors.green}✔ Switched to Tab #${tabId}: "${res.title || 'Untitled'}"${colors.reset}\n`);
+  } catch (err: any) {
+    console.error(`\n${colors.red}Error switching tab:${colors.reset} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function runRead(args: string[]) {
+  let isInteractive = args.includes('--interactive');
+  let tabId: number | undefined;
+
+  for (const a of args) {
+    if (a.startsWith('--tab=')) {
+      tabId = parseInt(a.slice(6), 10);
+    }
+  }
+
+  try {
+    const format = isInteractive ? 'interactive_elements' : 'text';
+    console.log(`${colors.dim}Reading page (${format})...${colors.reset}`);
+    const res = await client.dispatch('read_page', { format, tabId });
+
+    if (isInteractive && Array.isArray(res.elements)) {
+      console.log(`\n${colors.bold}${colors.cyan}Interactive Elements (${res.elements.length} found):${colors.reset}\n`);
+      for (const el of res.elements) {
+        const tag = el.tagName?.toLowerCase() || 'elem';
+        const typeStr = el.type ? `[type="${el.type}"]` : '';
+        const nameStr = el.name ? `[name="${el.name}"]` : '';
+        const idStr = el.id ? `#${el.id}` : '';
+        const textStr = el.text ? `"${el.text.slice(0, 40)}"` : '';
+        const valStr = el.value ? `(val: "${el.value.slice(0, 30)}")` : '';
+        console.log(`  ${colors.green}•${colors.reset} ${colors.bold}${tag}${idStr}${nameStr}${typeStr}${colors.reset} ${colors.yellow}${textStr}${colors.reset} ${colors.dim}${valStr}${colors.reset}`);
+      }
+      console.log('');
+    } else {
+      console.log(`\n${res.content || JSON.stringify(res, null, 2)}\n`);
+    }
+  } catch (err: any) {
+    console.error(`\n${colors.red}Error reading page:${colors.reset} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function runClick(args: string[]) {
+  const target = args.filter((a) => !a.startsWith('--'))[0];
+  let tabId: number | undefined;
+
+  for (const a of args) {
+    if (a.startsWith('--tab=')) {
+      tabId = parseInt(a.slice(6), 10);
+    }
+  }
+
+  if (!target) {
+    console.error(`\n${colors.red}Error:${colors.reset} Please provide a selector or text to click (e.g. bp click "Save & Continue")\n`);
+    process.exit(1);
+  }
+
+  try {
+    const params: any = { tabId };
+    if (target.startsWith('#') || target.startsWith('.') || target.includes('[') || target.includes('>')) {
+      params.selector = target;
+    } else {
+      params.text = target;
+    }
+    console.log(`${colors.dim}Clicking on "${target}"...${colors.reset}`);
+    const res = await client.dispatch('click', params);
+    console.log(`${colors.green}✔ Clicked: ${res.message || 'success'}${colors.reset}\n`);
+  } catch (err: any) {
+    console.error(`\n${colors.red}Error clicking element:${colors.reset} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function runType(args: string[]) {
+  const nonFlags = args.filter((a) => !a.startsWith('--'));
+  const selector = nonFlags[0];
+  const text = nonFlags.slice(1).join(' ');
+  let tabId: number | undefined;
+  let pressEnter = args.includes('--enter');
+
+  for (const a of args) {
+    if (a.startsWith('--tab=')) {
+      tabId = parseInt(a.slice(6), 10);
+    }
+  }
+
+  if (!selector || text === undefined) {
+    console.error(`\n${colors.red}Error:${colors.reset} Usage: bp type <selector> <text> [--tab=<id>] [--enter]\n`);
+    process.exit(1);
+  }
+
+  try {
+    console.log(`${colors.dim}Typing into "${selector}"...${colors.reset}`);
+    const res = await client.dispatch('type', { selector, text, tabId, pressEnter });
+    console.log(`${colors.green}✔ Typed text into ${selector}${colors.reset}\n`);
+  } catch (err: any) {
+    console.error(`\n${colors.red}Error typing into element:${colors.reset} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function runEval(args: string[]) {
+  const code = args.filter((a) => !a.startsWith('--')).join(' ');
+  let tabId: number | undefined;
+
+  for (const a of args) {
+    if (a.startsWith('--tab=')) {
+      tabId = parseInt(a.slice(6), 10);
+    }
+  }
+
+  if (!code) {
+    console.error(`\n${colors.red}Error:${colors.reset} Usage: bp eval "<code>" [--tab=<id>]\n`);
+    process.exit(1);
+  }
+
+  try {
+    const res = await client.dispatch('run_code', { code, tabId });
+    if (typeof res === 'object') {
+      console.log(JSON.stringify(res, null, 2));
+    } else {
+      console.log(res);
+    }
+  } catch (err: any) {
+    console.error(`\n${colors.red}Eval error:${colors.reset} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function runScroll(args: string[]) {
+  const dir = args.filter((a) => !a.startsWith('--'))[0] || 'down';
+  let tabId: number | undefined;
+
+  for (const a of args) {
+    if (a.startsWith('--tab=')) {
+      tabId = parseInt(a.slice(6), 10);
+    }
+  }
+
+  try {
+    await client.dispatch('scroll', { direction: dir, tabId });
+    console.log(`${colors.green}✔ Scrolled ${dir}${colors.reset}\n`);
+  } catch (err: any) {
+    console.error(`\n${colors.red}Scroll error:${colors.reset} ${err.message}\n`);
+    process.exit(1);
+  }
+}
+
+async function runSnap(outputFile?: string, tabId?: number) {
+  try {
+    console.log(`${colors.dim}Capturing tab screenshot...${colors.reset}`);
+    const res = await client.dispatch('screenshot', { tabId });
     if (!res.dataUrl) {
       throw new Error('No image data returned from browser.');
     }
@@ -849,9 +1017,31 @@ async function main() {
       await runNav(targetUrl, isNewTab);
       break;
     }
+    case 'switch':
+      await runSwitch(args[1]);
+      break;
+    case 'read':
+      await runRead(args.slice(1));
+      break;
+    case 'click':
+      await runClick(args.slice(1));
+      break;
+    case 'type':
+      await runType(args.slice(1));
+      break;
+    case 'eval':
+      await runEval(args.slice(1));
+      break;
+    case 'scroll':
+      await runScroll(args.slice(1));
+      break;
     case 'snap': {
       const outFile = args.filter((a) => !a.startsWith('--'))[1];
-      await runSnap(outFile);
+      let tabId: number | undefined;
+      for (const a of args) {
+        if (a.startsWith('--tab=')) tabId = parseInt(a.slice(6), 10);
+      }
+      await runSnap(outFile, tabId);
       break;
     }
     case 'tunnel':
