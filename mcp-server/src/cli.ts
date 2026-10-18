@@ -434,6 +434,91 @@ function detectPublicIp(): string {
   return 'YOUR_VPS_IP';
 }
 
+interface FirewallInfo {
+  type: 'ufw' | 'firewalld' | 'iptables' | 'nftables' | 'none';
+  active: boolean;
+  isPortAllowed: boolean;
+}
+
+function detectFirewall(port: string): FirewallInfo {
+  // 1. Check ufw
+  try {
+    const ufwCheck = execSync('which ufw', { stdio: 'pipe' });
+    if (ufwCheck) {
+      const statusOut = execSync('ufw status 2>/dev/null', { encoding: 'utf8' }).trim();
+      const isActive = statusOut.toLowerCase().includes('status: active');
+      if (isActive) {
+        const isAllowed = statusOut.includes(port);
+        return { type: 'ufw', active: true, isPortAllowed: isAllowed };
+      }
+    }
+  } catch {}
+
+  // 2. Check firewalld
+  try {
+    const fwdCheck = execSync('which firewall-cmd', { stdio: 'pipe' });
+    if (fwdCheck) {
+      const state = execSync('firewall-cmd --state 2>/dev/null', { encoding: 'utf8' }).trim();
+      const isActive = state === 'running';
+      if (isActive) {
+        const listPorts = execSync('firewall-cmd --list-ports 2>/dev/null', { encoding: 'utf8' });
+        const isAllowed = listPorts.includes(`${port}/tcp`) || listPorts.includes(port);
+        return { type: 'firewalld', active: true, isPortAllowed: isAllowed };
+      }
+    }
+  } catch {}
+
+  // 3. Check iptables
+  try {
+    const iptCheck = execSync('which iptables', { stdio: 'pipe' });
+    if (iptCheck) {
+      const rules = execSync('iptables -L INPUT -n 2>/dev/null', { encoding: 'utf8' });
+      // If default policy is DROP or REJECT, firewall is actively blocking
+      const isDropPolicy = rules.includes('Chain INPUT (policy DROP') || rules.includes('Chain INPUT (policy REJECT');
+      if (isDropPolicy) {
+        const isAllowed = rules.includes(`dpt:${port}`);
+        return { type: 'iptables', active: true, isPortAllowed: isAllowed };
+      }
+    }
+  } catch {}
+
+  // 4. Check nftables
+  try {
+    const nftCheck = execSync('which nft', { stdio: 'pipe' });
+    if (nftCheck) {
+      const ruleset = execSync('nft list ruleset 2>/dev/null', { encoding: 'utf8' });
+      if (ruleset && ruleset.includes('type filter hook input')) {
+        const isAllowed = ruleset.includes(`dport ${port}`);
+        return { type: 'nftables', active: true, isPortAllowed: isAllowed };
+      }
+    }
+  } catch {}
+
+  return { type: 'none', active: false, isPortAllowed: true };
+}
+
+function openFirewallPort(fwType: FirewallInfo['type'], port: string): boolean {
+  const sudoPrefix = process.getuid && process.getuid() === 0 ? '' : 'sudo ';
+  try {
+    if (fwType === 'ufw') {
+      execSync(`${sudoPrefix}ufw allow ${port}/tcp`, { stdio: 'inherit' });
+      return true;
+    } else if (fwType === 'firewalld') {
+      execSync(`${sudoPrefix}firewall-cmd --permanent --add-port=${port}/tcp && ${sudoPrefix}firewall-cmd --reload`, { stdio: 'inherit' });
+      return true;
+    } else if (fwType === 'iptables') {
+      execSync(`${sudoPrefix}iptables -I INPUT -p tcp --dport ${port} -j ACCEPT`, { stdio: 'inherit' });
+      return true;
+    } else if (fwType === 'nftables') {
+      execSync(`${sudoPrefix}nft add rule inet filter input tcp dport ${port} accept`, { stdio: 'inherit' });
+      return true;
+    }
+  } catch (err: any) {
+    console.error(`  ${colors.red}✖ Failed to configure firewall rule:${colors.reset} ${err.message}`);
+  }
+  return false;
+}
+
 async function runStart(args: string[]) {
   let port = '8770';
   let shouldOpenTunnel = false;
@@ -527,7 +612,7 @@ async function runStart(args: string[]) {
     try {
       execSync('systemctl start fire-browserpilot', { stdio: 'pipe' });
       started = true;
-      console.log(`  ${colors.green}✔${colors.reset} Started via systemd (${colors.bold}fire-browserpilot.service${colors.reset})`);
+      console.log(`  ${colors.green}✔${colors.reset} Started via systemctl (${colors.bold}fire-browserpilot.service${colors.reset})`);
     } catch {}
   }
 
@@ -549,20 +634,45 @@ async function runStart(args: string[]) {
     }
   }
 
-  // Tunnel handling
+  // 4. Firewall & Port Access Verification
+  const fw = detectFirewall(port);
   let tunnelUrl = '';
-  if (shouldOpenTunnel || hasFirePm) {
-    try {
-      if (shouldOpenTunnel) {
-        console.log(`\n  ${colors.dim}Opening reverse proxy tunnel on port ${port}...${colors.reset}`);
+
+  if (fw.active && !fw.isPortAllowed) {
+    console.log(`\n  ${colors.yellow}⚠ Firewall Notice:${colors.reset} Active firewall (${colors.bold}${fw.type}${colors.reset}) detected, but port ${colors.bold}${port}${colors.reset} is not allowed.`);
+
+    if (hasFirePm) {
+      console.log(`  ${colors.green}✔ Fire PM is available!${colors.reset} Opening a secure reverse proxy tunnel to bypass firewall...`);
+      try {
         execSync(`fire tunnel open ${port}`, { stdio: 'pipe' });
+      } catch {}
+    } else if (process.stdin.isTTY) {
+      const ans = await askQuestion(
+        `  ${colors.bold}Would you like to open port ${port}/tcp using ${fw.type}?${colors.reset} ${colors.dim}[y/N]:${colors.reset} `
+      );
+      if (ans.toLowerCase() === 'y' || ans.toLowerCase() === 'yes') {
+        const opened = openFirewallPort(fw.type, port);
+        if (opened) {
+          console.log(`  ${colors.green}✔ Successfully allowed port ${port}/tcp in ${fw.type}!${colors.reset}`);
+        }
+      } else {
+        console.log(`  ${colors.dim}Skipped opening port. Direct connections may be blocked by your firewall.${colors.reset}`);
       }
-      const tunnelEnv = `/tmp/fire-tunnels/${port}.env`;
-      if (fs.existsSync(tunnelEnv)) {
-        const content = fs.readFileSync(tunnelEnv, 'utf8');
-        const m = content.match(/URL=(https?:\/\/[^\s]+)/);
-        if (m && m[1]) tunnelUrl = m[1];
-      }
+    }
+  } else if (shouldOpenTunnel && hasFirePm) {
+    try {
+      console.log(`\n  ${colors.dim}Opening reverse proxy tunnel on port ${port}...${colors.reset}`);
+      execSync(`fire tunnel open ${port}`, { stdio: 'pipe' });
+    } catch {}
+  }
+
+  // Check if tunnel descriptor exists
+  const tunnelEnv = `/tmp/fire-tunnels/${port}.env`;
+  if (fs.existsSync(tunnelEnv)) {
+    try {
+      const content = fs.readFileSync(tunnelEnv, 'utf8');
+      const m = content.match(/URL=(https?:\/\/[^\s]+)/);
+      if (m && m[1]) tunnelUrl = m[1];
     } catch {}
   }
 
