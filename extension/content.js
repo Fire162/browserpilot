@@ -311,7 +311,7 @@
 
     if (format === 'interactive_elements') {
       const elements = [];
-      const nodes = document.querySelectorAll(
+      const nodes = deepQuerySelectorAll(
         'button, a[href], input, textarea, select, [role="button"], [role="link"], [role="checkbox"], [tabindex]:not([tabindex="-1"])'
       );
 
@@ -447,7 +447,7 @@
 
     if (!el && selector) {
       try {
-        const matches = document.querySelectorAll(selector);
+        const matches = deepQuerySelectorAll(selector);
         if (matches.length > 0) {
           if (typeof index === 'number') {
             el = index < 0 ? matches[matches.length + index] : matches[index];
@@ -522,12 +522,12 @@
 
   // --- 3. Type Into Element ---
   async function typeIntoElement({ selector, text, clear = false, pressEnter = false, humanize = false }) {
-    let el = selector ? document.querySelector(selector) : null;
+    let el = selector ? deepQuerySelector(selector) : null;
     if (!el && document.activeElement && (document.activeElement.isContentEditable || document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
       el = document.activeElement;
     }
     if (!el) {
-      el = document.querySelector('div[contenteditable="true"], [role="textbox"], textarea, input[type="text"]');
+      el = deepQuerySelector('div[contenteditable="true"], [role="textbox"], textarea, input[type="text"]');
     }
     if (!el) {
       throw new Error(`Input element not found for selector: "${selector || ''}"`);
@@ -733,8 +733,8 @@
   // --- Utilities ---
   function findElementByText(text) {
     const clean = text.trim().toLowerCase();
-    const candidates = Array.from(document.querySelectorAll(
-      'button, a, input[type=submit], input[type=button], [role="button"], span, div, p, h1, h2, h3, h4, h5, h6'
+    const candidates = Array.from(deepQuerySelectorAll(
+      'button, a, input[type=submit], input[type=button], [role="button"], span, div, p, h1, h2, h3, h4, h5, h6, label'
     ));
 
     // First pass: exact match, preferring elements with fewer child nodes (leaf elements)
@@ -763,12 +763,44 @@
     return null;
   }
 
+  function deepQuerySelectorAll(selector, root = document) {
+    const results = [];
+    function walk(node) {
+      if (!node) return;
+      if (node.querySelectorAll) {
+        try {
+          const matched = node.querySelectorAll(selector);
+          for (let i = 0; i < matched.length; i++) {
+            results.push(matched[i]);
+          }
+        } catch (e) {}
+      }
+      // Check shadow root
+      if (node.shadowRoot) {
+        walk(node.shadowRoot);
+      }
+      // Check children
+      if (node.children) {
+        for (let i = 0; i < node.children.length; i++) {
+          walk(node.children[i]);
+        }
+      }
+    }
+    walk(root);
+    return results;
+  }
+
+  function deepQuerySelector(selector, root = document) {
+    const all = deepQuerySelectorAll(selector, root);
+    return all.length > 0 ? all[0] : null;
+  }
+
   function isVisible(el) {
     if (!el) return false;
     const style = window.getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
     const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
+    return (rect.width > 0 && rect.height > 0) || el.tagName === 'TEXTAREA' || el.tagName === 'INPUT';
   }
 
   function highlightElement(el, color = '#10b981') {
