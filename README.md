@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="extension/icons/icon300.png" alt="BrowserPilot Logo" width="128" height="128" style="border-radius: 24px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); margin-bottom: 12px;">
+
 # 🚀 BrowserPilot
 
 ### Control your local desktop browser directly from remote VPS AI Agents via Model Context Protocol (MCP)
