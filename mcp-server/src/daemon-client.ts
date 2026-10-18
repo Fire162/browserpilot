@@ -1,9 +1,29 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { BrowserActionType, BrowserDispatcher } from './types.js';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Search for .env files in order of priority:
+// 1. Process cwd .env
+// 2. /mcp-server/.env (relative to dist)
+// 3. Project root .env
+// 4. ~/.browserpilot/.env
+const potentialEnvPaths = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(__dirname, '..', '.env'),
+  path.resolve(__dirname, '..', '..', '.env'),
+  path.join(process.env.HOME || '/root', '.browserpilot', '.env')
+];
+
+for (const envPath of potentialEnvPaths) {
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+}
 
 const DEFAULT_PORT = parseInt(process.env.WS_PORT || process.env.PORT || '8770', 10);
 
