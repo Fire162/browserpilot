@@ -6,66 +6,16 @@
   if (window.__browserpilot_injected) return;
   window.__browserpilot_injected = true;
 
+  // Shared DOM helpers (extension/dom-utils.js, injected first). Unit-tested
+  // under Node, so the traversal logic does not drift from its tests.
+  const dom = globalThis.BrowserPilotDom;
+  if (!dom) {
+    console.error('[BrowserPilot Content] dom-utils.js was not injected before content.js.');
+    return;
+  }
+  const { deepQuerySelectorAll, deepQuerySelector, findElementByText, generateUniqueSelector, isVisible } = dom;
+
   console.log('[BrowserPilot Content] DOM Engine initialized on:', window.location.href);
-
-  // Native Dialog Interception to prevent tab freeze
-  let pendingDialog = null;
-  let dialogActionPolicy = null; // null | 'accept' | 'dismiss'
-  let dialogDefaultPrompt = '';
-
-  const originalAlert = window.alert;
-  const originalConfirm = window.confirm;
-  const originalPrompt = window.prompt;
-
-  window.alert = function (message) {
-    console.log('[BrowserPilot] Intercepted alert:', message);
-    pendingDialog = { type: 'alert', message: String(message), timestamp: Date.now() };
-    if (dialogActionPolicy === 'dismiss' || dialogActionPolicy === 'accept') {
-      const res = pendingDialog;
-      pendingDialog = null;
-      return;
-    }
-    // Auto-resolve to prevent tab freeze if no agent policy set
-    pendingDialog.autoHandled = true;
-  };
-
-  window.confirm = function (message) {
-    console.log('[BrowserPilot] Intercepted confirm:', message);
-    pendingDialog = { type: 'confirm', message: String(message), timestamp: Date.now() };
-    if (dialogActionPolicy === 'dismiss') {
-      pendingDialog = null;
-      return false;
-    }
-    if (dialogActionPolicy === 'accept') {
-      pendingDialog = null;
-      return true;
-    }
-    // Default to true so user workflows continue
-    pendingDialog.autoHandled = true;
-    return true;
-  };
-
-  window.prompt = function (message, defaultVal = '') {
-    console.log('[BrowserPilot] Intercepted prompt:', message);
-    pendingDialog = { type: 'prompt', message: String(message), defaultValue: defaultVal, timestamp: Date.now() };
-    if (dialogActionPolicy === 'dismiss') {
-      pendingDialog = null;
-      return null;
-    }
-    if (dialogActionPolicy === 'accept') {
-      const val = dialogDefaultPrompt || defaultVal;
-      pendingDialog = null;
-      return val;
-    }
-    return defaultVal;
-  };
-
-  // Prevent beforeunload prompts from blocking automation
-  window.addEventListener('beforeunload', (e) => {
-    if (dialogActionPolicy === 'accept' || dialogActionPolicy === 'dismiss') {
-      delete e['returnValue'];
-    }
-  }, { capture: true });
 
   // --- Tab Permission Banner Engine ---
   let activePermissionBanner = null;
@@ -262,28 +212,9 @@
         return labelInteractiveElements(params);
       case 'evaluate':
         return evaluateScript(params);
-      case 'handle_dialog':
-        return handleDialogAction(params);
       default:
         throw new Error(`Unknown DOM action: ${action}`);
     }
-  }
-
-  function handleDialogAction({ action = 'accept', promptText = '', setPolicy = false }) {
-    if (setPolicy) {
-      dialogActionPolicy = action; // 'accept' or 'dismiss'
-      dialogDefaultPrompt = promptText;
-      return { ok: true, policySet: action, promptText };
-    }
-
-    const current = pendingDialog;
-    pendingDialog = null;
-
-    return {
-      ok: true,
-      handledDialog: current || null,
-      message: current ? `Handled ${current.type} dialog with action "${action}"` : 'No pending dialog was open'
-    };
   }
 
   // --- 1. Read Page Content ---
@@ -315,15 +246,16 @@
         'button, a[href], input, textarea, select, [role="button"], [role="link"], [role="checkbox"], [tabindex]:not([tabindex="-1"])'
       );
 
-      nodes.forEach((el, index) => {
+      nodes.forEach((el) => {
         if (!isVisible(el)) return;
         const rect = el.getBoundingClientRect();
         const text = (el.innerText || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.value || '').trim();
         const selector = generateUniqueSelector(el);
 
         elements.push({
-          index,
+          index: elements.length,
           tag: el.tagName.toLowerCase(),
+          tagName: el.tagName.toLowerCase(),
           text: text.slice(0, 100),
           selector,
           type: el.getAttribute('type') || undefined,
@@ -339,10 +271,14 @@
         });
       });
 
+      const visibleElements = elements.slice(0, 200);
       return {
         title,
         url,
-        content: JSON.stringify(elements.slice(0, 200), null, 2)
+        // `content` keeps the MCP tool output unchanged; `elements` is the
+        // structured list the `bp read --interactive` table consumes.
+        content: JSON.stringify(visibleElements, null, 2),
+        elements: visibleElements
       };
     }
 
@@ -447,7 +383,9 @@
 
     if (!el && selector) {
       try {
-        const matches = deepQuerySelectorAll(selector);
+        // read_page reports indices over *visible* matches only, so resolve the
+        // same way here; otherwise `index` pointed at a different element.
+        const matches = deepQuerySelectorAll(selector).filter((node) => isVisible(node));
         if (matches.length > 0) {
           if (typeof index === 'number') {
             el = index < 0 ? matches[matches.length + index] : matches[index];
@@ -503,12 +441,24 @@
     }
     el.dispatchEvent(new PointerEvent('pointerup', eventOpts));
     el.dispatchEvent(new MouseEvent('mouseup', eventOpts));
-    el.dispatchEvent(new MouseEvent('click', eventOpts));
 
+    // Exactly one activation. `el.click()` both fires a bubbling click event and
+    // runs the element's default action (checkbox toggle, link navigation, form
+    // submit). Dispatching a synthetic click *as well* used to fire every
+    // handler twice — double submits, double "add to cart", checkboxes that
+    // toggled straight back. Only fall back to a synthetic event when the
+    // element has no callable `click`.
+    let activated = false;
     if (typeof el.click === 'function') {
       try {
         el.click();
-      } catch (e) {}
+        activated = true;
+      } catch (err) {
+        activated = false;
+      }
+    }
+    if (!activated) {
+      el.dispatchEvent(new MouseEvent('click', eventOpts));
     }
 
     // Wait 300ms for UI / menus / animations to open
@@ -522,15 +472,34 @@
 
   // --- 3. Type Into Element ---
   async function typeIntoElement({ selector, text, clear = false, pressEnter = false, humanize = false }) {
-    let el = selector ? deepQuerySelector(selector) : null;
-    if (!el && document.activeElement && (document.activeElement.isContentEditable || document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
-      el = document.activeElement;
-    }
-    if (!el) {
-      el = deepQuerySelector('div[contenteditable="true"], [role="textbox"], textarea, input[type="text"]');
-    }
-    if (!el) {
-      throw new Error(`Input element not found for selector: "${selector || ''}"`);
+    let el = null;
+
+    if (selector) {
+      // An explicit selector must resolve. Falling back to the focused element
+      // (or the first text input on the page) meant an agent could believe it
+      // had filled a named field while the text landed in a DM box or search
+      // bar. Failing loudly is safer than typing into the wrong target.
+      el = deepQuerySelector(selector);
+      if (!el) {
+        throw new Error(
+          `Input element not found for selector: "${selector}". Nothing was typed — verify the selector with browser_read_page({ format: "interactive_elements" }).`
+        );
+      }
+    } else {
+      if (
+        document.activeElement &&
+        (document.activeElement.isContentEditable ||
+          document.activeElement.tagName === 'INPUT' ||
+          document.activeElement.tagName === 'TEXTAREA')
+      ) {
+        el = document.activeElement;
+      }
+      if (!el) {
+        el = deepQuerySelector('div[contenteditable="true"], [role="textbox"], textarea, input[type="text"]');
+      }
+      if (!el) {
+        throw new Error('No focused or obvious text input found. Pass an explicit `selector`.');
+      }
     }
 
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -666,12 +635,55 @@
   }
 
   // --- 7. Label Interactive Elements (OmniParser mode) ---
+  // Badges are positioned with `position: fixed`, so they have to be recomputed
+  // whenever the page scrolls or resizes. Without this they stayed where they
+  // were first drawn and `browser_click({ label })` pointed at whatever ended
+  // up under the stale coordinates.
+  let labelBadges = [];
+  let labelRepositionFrame = null;
+
+  function removeLabelBadges() {
+    for (const entry of labelBadges) {
+      if (entry.badge && entry.badge.parentNode) entry.badge.parentNode.removeChild(entry.badge);
+      if (entry.el && entry.el.getAttribute) entry.el.removeAttribute('data-browserpilot-label');
+    }
+    labelBadges = [];
+    // Sweep badges left behind by a previous injection of this script.
+    if (document && document.querySelectorAll) {
+      document.querySelectorAll('.browserpilot-label-badge').forEach((badge) => badge.remove());
+    }
+    if (labelRepositionFrame !== null) {
+      cancelAnimationFrame(labelRepositionFrame);
+      labelRepositionFrame = null;
+    }
+    window.removeEventListener('scroll', scheduleLabelReposition, true);
+    window.removeEventListener('resize', scheduleLabelReposition, true);
+  }
+
+  function repositionLabelBadges() {
+    labelRepositionFrame = null;
+    let detached = false;
+    for (const entry of labelBadges) {
+      const { el, badge } = entry;
+      if (!el.isConnected) {
+        detached = true;
+        continue;
+      }
+      const rect = el.getBoundingClientRect();
+      badge.style.left = `${Math.max(0, rect.left)}px`;
+      badge.style.top = `${Math.max(0, rect.top - 12)}px`;
+      badge.style.display = rect.width === 0 && rect.height === 0 ? 'none' : 'block';
+    }
+    if (detached) removeLabelBadges();
+  }
+
+  function scheduleLabelReposition() {
+    if (labelRepositionFrame !== null) return;
+    labelRepositionFrame = requestAnimationFrame(repositionLabelBadges);
+  }
+
   async function labelInteractiveElements({ remove = false } = {}) {
-    // Remove existing badges
-    document.querySelectorAll('.browserpilot-label-badge').forEach((b) => b.remove());
-    document.querySelectorAll('[data-browserpilot-label]').forEach((el) => {
-      el.removeAttribute('data-browserpilot-label');
-    });
+    removeLabelBadges();
 
     if (remove) {
       return { ok: true, message: 'Labels cleared', count: 0 };
@@ -708,14 +720,23 @@
       badge.style.fontFamily = 'monospace';
       document.body.appendChild(badge);
 
+      labelBadges.push({ el, badge });
+
       const text = (el.innerText || el.getAttribute('aria-label') || el.value || '').trim().slice(0, 40);
       labeledList.push({
         label: count,
         tag: el.tagName.toLowerCase(),
+        tagName: el.tagName.toLowerCase(),
         text,
         selector: generateUniqueSelector(el)
       });
     });
+
+    if (labelBadges.length > 0) {
+      // capture: true also catches scrolling inside nested containers
+      window.addEventListener('scroll', scheduleLabelReposition, { capture: true, passive: true });
+      window.addEventListener('resize', scheduleLabelReposition, { capture: true, passive: true });
+    }
 
     return {
       count,
@@ -731,78 +752,6 @@
   }
 
   // --- Utilities ---
-  function findElementByText(text) {
-    const clean = text.trim().toLowerCase();
-    const candidates = Array.from(deepQuerySelectorAll(
-      'button, a, input[type=submit], input[type=button], [role="button"], span, div, p, h1, h2, h3, h4, h5, h6, label'
-    ));
-
-    // First pass: exact match, preferring elements with fewer child nodes (leaf elements)
-    const exactMatches = [];
-    for (const el of candidates) {
-      if (!isVisible(el)) continue;
-      const content = (el.innerText || el.getAttribute('aria-label') || el.value || '').trim().toLowerCase();
-      if (content === clean) {
-        exactMatches.push(el);
-      }
-    }
-    if (exactMatches.length > 0) {
-      // Sort so elements with fewest children come first
-      exactMatches.sort((a, b) => a.childElementCount - b.childElementCount);
-      return exactMatches[0];
-    }
-
-    // Second pass: substring match
-    for (const el of candidates) {
-      if (!isVisible(el)) continue;
-      const content = (el.innerText || el.getAttribute('aria-label') || el.value || '').trim().toLowerCase();
-      if (content.includes(clean) && content.length < clean.length + 30) {
-        return el;
-      }
-    }
-    return null;
-  }
-
-  function deepQuerySelectorAll(selector, root = document) {
-    const results = [];
-    function walk(node) {
-      if (!node) return;
-      if (node.querySelectorAll) {
-        try {
-          const matched = node.querySelectorAll(selector);
-          for (let i = 0; i < matched.length; i++) {
-            results.push(matched[i]);
-          }
-        } catch (e) {}
-      }
-      // Check shadow root
-      if (node.shadowRoot) {
-        walk(node.shadowRoot);
-      }
-      // Check children
-      if (node.children) {
-        for (let i = 0; i < node.children.length; i++) {
-          walk(node.children[i]);
-        }
-      }
-    }
-    walk(root);
-    return results;
-  }
-
-  function deepQuerySelector(selector, root = document) {
-    const all = deepQuerySelectorAll(selector, root);
-    return all.length > 0 ? all[0] : null;
-  }
-
-  function isVisible(el) {
-    if (!el) return false;
-    const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-    const rect = el.getBoundingClientRect();
-    return (rect.width > 0 && rect.height > 0) || el.tagName === 'TEXTAREA' || el.tagName === 'INPUT';
-  }
-
   function highlightElement(el, color = '#10b981') {
     const originalOutline = el.style.outline;
     const originalTransition = el.style.transition;
@@ -890,15 +839,5 @@
     }
 
     lastMousePos = { x: targetX, y: targetY };
-  }
-
-  function generateUniqueSelector(el) {
-    if (el.id) return `#${el.id}`;
-    if (el.getAttribute('name')) return `${el.tagName.toLowerCase()}[name="${el.getAttribute('name')}"]`;
-    if (el.className && typeof el.className === 'string') {
-      const classes = el.className.split(/\s+/).filter((c) => c && !c.includes(':') && !c.includes('/'));
-      if (classes.length > 0) return `${el.tagName.toLowerCase()}.${classes.slice(0, 2).join('.')}`;
-    }
-    return el.tagName.toLowerCase();
   }
 })();

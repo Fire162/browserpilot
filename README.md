@@ -74,7 +74,7 @@ sequenceDiagram
 
     User->>Ext: Loads Extension & Enters VPS Endpoint
     Ext->>Relay: Initializes Background Offscreen Relay
-    Relay->>MCP: Outbound WebSocket Connect (ws://<your-vps-ip>:8765?token=...)
+    Relay->>MCP: Outbound WebSocket Connect (ws://<your-vps-ip>:8770?token=...)
     MCP-->>Relay: Auth Verified (200 OK)
     
     rect rgb(30, 41, 59)
@@ -108,14 +108,14 @@ BrowserPilot exposes 21 specialized tools directly to any MCP-compatible AI agen
 | `browser_press_key`| Dispatches keyboard events (`Enter`, `Escape`, `Tab`, `ArrowDown`). | `key`, `tabId?` |
 | `browser_scroll` | Scrolls the page in any direction or scrolls an element into view. | `direction?` (`up`, `down`, `top`, `bottom`), `amount?`, `selector?` |
 | `browser_take_screenshot` | Captures the active viewport (preserves user active tab). | `tabId?` |
-| `browser_evaluate`| Runs custom JavaScript in page context. | `script`, `tabId?` |
-| `browser_run_code`| 🚀 **Agent Code Interpreter**: Executes async JavaScript with elevated privileges (bypasses website CSP). | `code`, `tabId?` |
-| `browser_get_cookies`| 🍪 Extracts active cookies & session tokens for current domain. | `tabId?` |
+| `browser_evaluate`| Runs custom JavaScript in page context. **Requires `ALLOW_CODE_EXECUTION=true`.** | `script`, `tabId?` |
+| `browser_run_code`| 🚀 **Agent Code Interpreter**: Executes async JavaScript with elevated privileges (bypasses website CSP). **Requires `ALLOW_CODE_EXECUTION=true`.** | `code`, `tabId?` |
+| `browser_get_cookies`| 🍪 Extracts active cookies & session tokens for current domain. **Requires `ALLOW_COOKIE_ACCESS=true`.** | `tabId?` |
 | `browser_upload_file`| 📁 Directly populates `<input type="file">` with base64 data. | `base64Data`, `filename`, `mimeType?`, `selector?`, `tabId?` |
 | `browser_label_elements`| 🎯 Numbers all interactive elements on screen (OmniParser mode). | `remove?`, `tabId?` |
-| `browser_handle_dialog`| 🛑 Intercepts & handles native JavaScript dialogs (`alert`, `confirm`, `prompt`, `beforeunload`). | `action?` (`accept`, `dismiss`), `promptText?`, `setPolicy?`, `tabId?` |
+| `browser_handle_dialog`| 🛑 Sets the auto-answer policy for native dialogs (`alert`, `confirm`, `prompt`) on a tab so they cannot freeze automation. Native dialogs are synchronous, so the policy is applied immediately instead of waiting for an answer. Default `dismiss`. | `action?` (`accept`, `dismiss`), `promptText?`, `tabId?` |
 | `browser_wait_for_network_idle`| ⏳ Waits until all active XHR/fetch requests settle on single-page apps. | `idleTimeMs?`, `timeoutMs?`, `tabId?` |
-| `browser_clipboard`| 📋 Reads from or writes text to the desktop browser clipboard. | `action` (`read`, `write`), `text?` |
+| `browser_clipboard`| 📋 Reads from or writes text to the desktop browser clipboard. Reads need a focused window; when Chrome refuses, the tool returns an explicit error instead of an empty string. | `action` (`read`, `write`), `text?` |
 | `browser_downloads`| 📂 Lists recent downloads or waits for an active file download to complete. | `action?` (`list`, `wait`), `filenamePattern?`, `downloadId?`, `limit?`, `timeoutMs?` |
 | `browser_request_tab_access`| 🛡️ Requests explicit user permission to access a protected pre-existing tab. | `tabId`, `reason?`, `timeoutSeconds?` |
 
@@ -174,7 +174,9 @@ browserpilot/
 
 2. Configure environment variables in `mcp-server/.env`:
    ```bash
-   WS_PORT=8765
+   WS_PORT=8770
+   # SECRET_TOKEN is optional: if omitted, a strong token is generated on first
+   # start and saved (0600) to ~/.browserpilot/.env
    SECRET_TOKEN=my-secure-browserpilot-token
    ```
 
@@ -260,7 +262,7 @@ browserpilot/
    - Enable **Developer mode** in the top-right toggle.
    - Click **Load unpacked** and select the `extension` folder.
 3. Click the **BrowserPilot** icon in your browser toolbar:
-   - **VPS WebSocket Endpoint**: `ws://<your-vps-ip>:8765` *(or `wss://tunnel.yourdomain.com`)*
+   - **VPS WebSocket Endpoint**: `ws://<your-vps-ip>:8770` *(or `wss://tunnel.yourdomain.com`)*
    - **Secret Token**: `my-secure-browserpilot-token`
    - Click **Connect**.
 4. The badge will turn **🟢 ON** and status will display **"Connected to VPS"**.
@@ -279,7 +281,7 @@ Add BrowserPilot to your agent's MCP configuration:
       "command": "node",
       "args": ["/path/to/browserpilot/mcp-server/dist/index.js"],
       "env": {
-        "WS_PORT": "8765",
+        "WS_PORT": "8770",
         "SECRET_TOKEN": "my-secure-browserpilot-token"
       }
     }
@@ -295,7 +297,7 @@ Add BrowserPilot to your agent's MCP configuration:
       "command": "node",
       "args": ["/root/browserpilot/mcp-server/dist/index.js"],
       "env": {
-        "WS_PORT": "8765",
+        "WS_PORT": "8770",
         "SECRET_TOKEN": "my-secure-browserpilot-token"
       }
     }
@@ -308,10 +310,40 @@ Add BrowserPilot to your agent's MCP configuration:
 ## 🔒 Security & Privacy
 
 > [!IMPORTANT]
-> The WebSocket bridge allows arbitrary command execution inside your browser session. Always protect your connection:
-> - **Pre-Shared Secret**: Set a strong `SECRET_TOKEN` in your environment.
-> - **Encryption**: When running over public networks, route through an encrypted tunnel (Cloudflare Tunnel, Tailscale, or Nginx with Let's Encrypt `wss://`).
-> - **Visual Feedback**: When an AI agent clicks or interacts with elements, BrowserPilot highlights them with green/blue halos in real-time so you always see what the agent is doing.
+> The bridge can execute commands inside your browser session. BrowserPilot is hardened by default — but read this section before exposing the port.
+
+**Authentication**
+
+- There is **no built-in secret**. If `SECRET_TOKEN` is not set, the daemon generates a strong token on first start, stores it in `~/.browserpilot/.env` with `0600` permissions, and prints a masked hint. Read the file (or run `bp status`) to copy it into the extension popup.
+- The old placeholder value `browserpilot-secret` makes the daemon **refuse to start** (it is public knowledge). Remove it and restart to get a generated token; `BROWSERPILOT_ALLOW_INSECURE_TOKEN=true` is the explicit, discouraged opt-out for existing deployments.
+- Tokens are compared in constant time and failed attempts are rate limited (10 per minute per address by default), so the port cannot be brute-forced.
+
+**Network exposure**
+
+- `BROWSERPILOT_BIND` defaults to `0.0.0.0` because the extension usually connects from another machine. Set `BROWSERPILOT_BIND=127.0.0.1` when a tunnel on the same host is the only ingress.
+- Prefer an encrypted tunnel (Fire PM, Cloudflare Tunnel, Tailscale, or Nginx with Let's Encrypt) over a raw public port.
+- Browser origins are checked on both the HTTP API and the WebSocket handshake: only `chrome-extension://*` and loopback origins are accepted unless you add hosts to `BROWSERPILOT_ALLOWED_ORIGINS`. This blocks DNS-rebinding and "random website opens a socket to localhost" attacks even if the token leaks. CORS is never wildcarded.
+
+**Dangerous capabilities are opt-in**
+
+| Capability | Tools | Enable with |
+| :--- | :--- | :--- |
+| Arbitrary JS in your logged-in browser | `browser_run_code`, `browser_evaluate` | `ALLOW_CODE_EXECUTION=true` |
+| Session-cookie export | `browser_get_cookies` | `ALLOW_COOKIE_ACCESS=true` |
+
+Both are **disabled by default**; the tools return an explanatory error instead of running. `GET /status` reports the active posture so you can verify it.
+
+**Tab permissions**
+
+- Agent-spawned tabs are auto-approved; your own tabs are gated by the permission engine.
+- Grants are scoped to the **exact origin** they were approved on and are re-validated on every command, so a tab id recycled after a browser restart, or an approved tab navigated to another site, cannot inherit old access.
+- Closing tabs follows the same rule: tabs the agent opened can always be closed, protected user tabs require an explicit approval first.
+
+**Other**
+
+- Request bodies are capped at 1 MB, unknown actions are rejected before they reach the extension, and the SSE/dispatch handlers cannot crash the daemon.
+- **Visual Feedback**: when an agent clicks or interacts with elements, BrowserPilot highlights them with green/blue halos in real time.
+- `bp start` never pipes a remote installer into `sudo`: it downloads the Fire PM script to a temp file and prints its SHA-256 for you to review.
 
 ---
 
