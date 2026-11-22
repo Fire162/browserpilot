@@ -17,16 +17,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Tab permissions are origin-scoped.** Grants now store `{origin, kind}` and are re-validated against the tab's live origin on every command and on navigation, so recycled tab ids after a browser restart and cross-origin navigations can no longer inherit an old approval. `close_tab`/`close_tabs` are no longer exempt from the permission engine: protected user tabs must be approved before the agent can close them.
 
 ### Fixed
+* **Clicks fired twice.** `content.js` sent one activation as `el.click()` *and* a synthetic `click` event, so handlers, form submits and "add to cart" buttons ran twice and checkboxes toggled straight back. Now exactly one activation is dispatched, with the synthetic event kept only as a fallback for elements without a callable `click`.
+* **`read_page` returned duplicate elements.** The shadow-DOM walker queried every ancestor, so a match was listed once per level up to the root; reported indices therefore did not line up with anything. Traversal now lives in `extension/dom-utils.js`, dedupes results, and is covered by `test/test-dom-utils.ts`.
+* **`bp read --interactive` never printed the table.** The CLI read `el.tagName` while the extension sent `tag`, so every row rendered as `elem` — and the handler only ran with `--interactive`, which the tool description never mentioned. Rows now show the tag and the reported index, and `read_page` returns both the legacy `content` string and a structured `elements` array.
+* **`browser_click({ selector, index })` could hit the wrong element.** The index came from a list of *visible* elements but was resolved against all matches, so hidden duplicates shifted it. Resolution now filters to visible elements, exactly like the report.
+* **`browser_type` silently typed into the wrong field.** A selector that matched nothing used to fall back to the focused element (or the first input on the page) and report success. An explicit selector must now resolve, otherwise the call fails and nothing is typed.
+* **Dialog interception did nothing.** `alert`/`confirm`/`prompt` were overridden from the content script, which runs in an isolated world, so the page's own dialogs still opened and froze the tab. Overrides now run in the page's MAIN world (`extension/dialog-hook.js`, injected by the background worker), resolve immediately from a persisted policy (default `dismiss`), keep "Leave site?" prompts from blocking navigation, and are re-installed automatically after navigation.
+* **Label badges drifted after scrolling.** Badges were drawn once at `position: fixed` coordinates and never moved, so `browser_click({ label })` targeted whatever slid under the stale position. They now reposition on scroll/resize via `requestAnimationFrame` and clean up when their element leaves the DOM.
+* **Reconnect could kill a fresh command.** The `close` handler drained the *shared* pending-request map, so a reconnect (which closes the previous socket asynchronously) rejected commands already sent on the new connection. Pending requests are now scoped to the socket that carried them.
+* **Half-open bridges looked connected.** A slept laptop or dropped NAT mapping left the socket `OPEN` while nothing answered, so every tool call burned its full timeout. The hub now records heartbeats and reports/dispatches a stale bridge after `BROWSERPILOT_STALE_AFTER_MS` (default 45s) with an actionable message.
+* **`browser_take_screenshot` crashed with a `TypeError`** when the extension returned no image data (closed, minimised or restricted tab). It now returns a readable error and explanation.
+* **Clipboard reported success while failing.** `offscreen.js` never requested the `CLIPBOARD` reason, so reads silently returned an empty string, and write failures were swallowed. Reads now report `denied` with the browser's reason, writes surface the error, and `browser_clipboard` returns them as errors. Command parameters are no longer logged (they can contain typed secrets).
+* **`bp read` / `.env` resolution drifted between client and daemon.** Both now share `loadProjectEnvFiles()` (cwd → `mcp-server/.env` → repo root), plus `~/.browserpilot/.env` for tokens, so a `.env` picked up by one process is picked up by the other.
 * **Daemon crash on bad requests.** The async HTTP handler is fully guarded; a failing `/sse` connect or `/message` post now returns `500` instead of becoming an unhandled rejection that terminated the process.
 * **Policy rejections reject instead of throwing** (`WebSocketHub.dispatch` is `async`), so callers using `.catch()` cannot crash on a gated action.
 * **Startup no longer prints the secret token** to the console/journal.
 
 ### Added
-* `test/test-security.ts` — 24 regression checks covering the origin gate, token handling, rate limiting, action allow-list, capability gate, body caps, SSE crash-safety and the WebSocket handshake.
+* `test/test-hub.ts` (7 checks: reconnect race, staleness, disconnect handling) and `test/test-dom-utils.ts` (9 checks: shadow-DOM deduplication, ordering, selector generation) — both run from `npm test`.
+* `test/test-security.ts` — 28 regression checks covering the origin gate, token handling, rate limiting, action allow-list, capability gate, body caps, SSE crash-safety and the WebSocket handshake.
 * `pnpm test` / `pnpm typecheck` scripts; the server version is read from `package.json` instead of a hardcoded literal.
 * `BROWSERPILOT_BIND`, `BROWSERPILOT_ALLOWED_ORIGINS`, `BROWSERPILOT_ALLOW_INSECURE_TOKEN`, `BROWSERPILOT_MAX_BODY_BYTES`, `BROWSERPILOT_AUTH_*`, `ALLOW_CODE_EXECUTION` and `ALLOW_COOKIE_ACCESS` documented in `mcp-server/.env.example`.
 
 ### Changed
+* `bp read --interactive` output gained the element index column; `browser_handle_dialog` now applies a persisted per-tab policy instead of pretending to handle a pending dialog (native dialogs are synchronous and cannot wait for an answer).
 * Port examples in the README and popup helper text now consistently use `8770` (the code default) instead of a mix of `8765`/`8770`.
 
 ## [1.4.1] - 2026-10-16 21:10 IST

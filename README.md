@@ -113,9 +113,9 @@ BrowserPilot exposes 21 specialized tools directly to any MCP-compatible AI agen
 | `browser_get_cookies`| 🍪 Extracts active cookies & session tokens for current domain. **Requires `ALLOW_COOKIE_ACCESS=true`.** | `tabId?` |
 | `browser_upload_file`| 📁 Directly populates `<input type="file">` with base64 data. | `base64Data`, `filename`, `mimeType?`, `selector?`, `tabId?` |
 | `browser_label_elements`| 🎯 Numbers all interactive elements on screen (OmniParser mode). | `remove?`, `tabId?` |
-| `browser_handle_dialog`| 🛑 Intercepts & handles native JavaScript dialogs (`alert`, `confirm`, `prompt`, `beforeunload`). | `action?` (`accept`, `dismiss`), `promptText?`, `setPolicy?`, `tabId?` |
+| `browser_handle_dialog`| 🛑 Sets the auto-answer policy for native dialogs (`alert`, `confirm`, `prompt`) on a tab so they cannot freeze automation. Native dialogs are synchronous, so the policy is applied immediately instead of waiting for an answer. Default `dismiss`. | `action?` (`accept`, `dismiss`), `promptText?`, `tabId?` |
 | `browser_wait_for_network_idle`| ⏳ Waits until all active XHR/fetch requests settle on single-page apps. | `idleTimeMs?`, `timeoutMs?`, `tabId?` |
-| `browser_clipboard`| 📋 Reads from or writes text to the desktop browser clipboard. | `action` (`read`, `write`), `text?` |
+| `browser_clipboard`| 📋 Reads from or writes text to the desktop browser clipboard. Reads need a focused window; when Chrome refuses, the tool returns an explicit error instead of an empty string. | `action` (`read`, `write`), `text?` |
 | `browser_downloads`| 📂 Lists recent downloads or waits for an active file download to complete. | `action?` (`list`, `wait`), `filenamePattern?`, `downloadId?`, `limit?`, `timeoutMs?` |
 | `browser_request_tab_access`| 🛡️ Requests explicit user permission to access a protected pre-existing tab. | `tabId`, `reason?`, `timeoutSeconds?` |
 

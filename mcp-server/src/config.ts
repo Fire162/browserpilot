@@ -2,7 +2,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import dotenv from 'dotenv';
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -26,6 +28,9 @@ export const SERVER_VERSION: string = (() => {
  */
 
 export const DEFAULT_PORT = 8770;
+
+/** Default heartbeat window before a connected-but-silent bridge is stale. */
+export const DEFAULT_STALE_AFTER_MS = 45_000;
 
 /** Token that shipped in older releases and is public knowledge. */
 export const LEGACY_DEFAULT_TOKEN = 'browserpilot-secret';
@@ -51,6 +56,8 @@ export interface DaemonConfig {
   authMaxFailures: number;
   authWindowMs: number;
   authBlockMs: number;
+  /** Silence after which a connected bridge is reported as stale. */
+  staleAfterMs: number;
 }
 
 export function parseBoolean(value: string | undefined, fallback = false): boolean {
@@ -72,6 +79,36 @@ export function parsePort(value: string | number | undefined, fallback = DEFAULT
     throw new Error(`Invalid port '${raw}': expected an integer between 1 and 65535.`);
   }
   return port;
+}
+
+/**
+ * Loads the project `.env` files in a fixed order (cwd first, then the package
+ * and repository roots). Shared by the daemon and the CLI client so
+ * "configure mcp-server/.env" behaves the same regardless of where the process
+ * was started from.
+ */
+export function loadProjectEnvFiles(): string[] {
+  let moduleDir = '';
+  try {
+    moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  } catch {
+    moduleDir = process.cwd();
+  }
+
+  const candidates = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(moduleDir, '..', '.env'), // mcp-server/.env (src/ and dist/)
+    path.resolve(moduleDir, '..', '..', '.env') // repository root
+  ];
+
+  const loaded: string[] = [];
+  for (const candidate of candidates) {
+    if (loaded.includes(candidate)) continue;
+    if (!fs.existsSync(candidate)) continue;
+    dotenv.config({ path: candidate });
+    loaded.push(candidate);
+  }
+  return loaded;
 }
 
 function parseTokenFromEnvFile(file: string): string {
@@ -194,6 +231,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     maxBodyBytes: Number(env.BROWSERPILOT_MAX_BODY_BYTES || 1_048_576) || 1_048_576,
     authMaxFailures: Number(env.BROWSERPILOT_AUTH_MAX_FAILURES || 10) || 10,
     authWindowMs: Number(env.BROWSERPILOT_AUTH_WINDOW_MS || 60_000) || 60_000,
-    authBlockMs: Number(env.BROWSERPILOT_AUTH_BLOCK_MS || 60_000) || 60_000
+    authBlockMs: Number(env.BROWSERPILOT_AUTH_BLOCK_MS || 60_000) || 60_000,
+    staleAfterMs: Number(env.BROWSERPILOT_STALE_AFTER_MS || DEFAULT_STALE_AFTER_MS) || DEFAULT_STALE_AFTER_MS
   };
 }

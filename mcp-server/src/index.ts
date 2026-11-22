@@ -1,14 +1,21 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import dotenv from 'dotenv';
 import { WebSocketHub } from './websocket-hub.js';
 import { registerBrowserTools } from './tools.js';
-import { assertSecureConfig, loadConfig, DaemonConfig, SERVER_VERSION, USER_ENV_FILE } from './config.js';
+import {
+  assertSecureConfig,
+  loadConfig,
+  loadProjectEnvFiles,
+  DaemonConfig,
+  SERVER_VERSION,
+  USER_ENV_FILE
+} from './config.js';
 import { ActionPolicy, AuthRateLimiter } from './policy.js';
 import { createHttpServer } from './http-server.js';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables (cwd, mcp-server/.env, repository root — same
+// order as the CLI client, so both agree on the port and token).
+loadProjectEnvFiles();
 
 const RUN_STDIO = process.argv.includes('--stdio') || process.env.MCP_STDIO === 'true';
 
@@ -56,7 +63,8 @@ async function main() {
   const hub = new WebSocketHub(config.port, config.secretToken, {
     allowedOrigins: config.allowedOrigins,
     policy,
-    rateLimiter
+    rateLimiter,
+    staleAfterMs: config.staleAfterMs
   });
 
   // 2. Create unified HTTP server (origin checks, auth, body caps, no crashes)

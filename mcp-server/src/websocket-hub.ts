@@ -11,12 +11,19 @@ export interface WebSocketHubOptions {
   policy?: ActionPolicy;
   /** Brute-force guard applied to failed handshakes. */
   rateLimiter?: AuthRateLimiter;
+  /**
+   * How long the bridge may stay silent before it is reported as stale. The
+   * extension pings every 15s, so the default tolerates three missed beats.
+   */
+  staleAfterMs?: number;
 }
 
 interface PendingRequest {
   resolve: (value: any) => void;
   reject: (reason: any) => void;
   timer: NodeJS.Timeout;
+  /** Socket the command was written to; responses are only matched to it. */
+  socket: WebSocket;
 }
 
 export class WebSocketHub {
@@ -30,6 +37,7 @@ export class WebSocketHub {
   private allowedOrigins: string[];
   private policy: ActionPolicy;
   private rateLimiter: AuthRateLimiter;
+  private staleAfterMs: number;
 
   constructor(port: number = 8770, secretToken: string = '', options: WebSocketHubOptions = {}) {
     this.port = port;
@@ -39,6 +47,7 @@ export class WebSocketHub {
     this.allowedOrigins = options.allowedOrigins || [];
     this.policy = options.policy || new ActionPolicy({ allowCodeExecution: false, allowCookieAccess: false });
     this.rateLimiter = options.rateLimiter || new AuthRateLimiter();
+    this.staleAfterMs = options.staleAfterMs ?? 45_000;
   }
 
   private verifyConnection(req: IncomingMessage): boolean {
@@ -97,6 +106,11 @@ export class WebSocketHub {
         });
 
         this.wss.on('listening', () => {
+          // Honour `port: 0` (OS-assigned) so tests can bind an ephemeral port.
+          const address = this.wss?.address();
+          if (address && typeof address === 'object') {
+            this.port = address.port;
+          }
           console.error(`[WebSocketHub] Listening for Chrome Extension on ws://0.0.0.0:${this.port}`);
           resolve();
         });
@@ -147,9 +161,15 @@ export class WebSocketHub {
         if (this.activeClient === ws) {
           this.activeClient = null;
         }
-        for (const [id, req] of this.pendingRequests.entries()) {
-          clearTimeout(req.timer);
-          req.reject(new Error('Extension disconnected before command response was received'));
+
+        // Only fail commands that were written to *this* socket. A reconnect
+        // closes the previous socket asynchronously; rejecting everything here
+        // used to kill commands that had just been dispatched on the new
+        // connection (the extension answered, nobody was listening).
+        for (const [id, pending] of this.pendingRequests.entries()) {
+          if (pending.socket !== ws) continue;
+          clearTimeout(pending.timer);
+          pending.reject(new Error('Extension disconnected before command response was received'));
           this.pendingRequests.delete(id);
         }
       });
@@ -187,6 +207,11 @@ export class WebSocketHub {
     return false;
   }
 
+  /** Port actually bound (useful when constructed with port 0). */
+  public getPort(): number {
+    return this.port;
+  }
+
   public getPolicy(): ActionPolicy {
     return this.policy;
   }
@@ -220,10 +245,30 @@ export class WebSocketHub {
     return this.activeClient !== null && this.activeClient.readyState === WebSocket.OPEN;
   }
 
+  /** Milliseconds since the last frame from the extension (0 when never seen). */
+  public silentForMs(now = Date.now()): number {
+    if (!this.lastSeen) return Number.POSITIVE_INFINITY;
+    return Math.max(0, now - this.lastSeen);
+  }
+
+  /**
+   * A half-open socket (laptop slept, NAT mapping dropped) stays OPEN for
+   * minutes while every command times out. Treat a silent bridge as
+   * disconnected so callers fail fast with an actionable message.
+   */
+  public isStale(now = Date.now()): boolean {
+    return this.isConnected() && this.silentForMs(now) > this.staleAfterMs;
+  }
+
   public getStatus() {
+    const silentForMs = this.silentForMs();
+    const stale = this.isStale();
     return {
-      connected: this.isConnected(),
+      connected: this.isConnected() && !stale,
+      stale,
       lastSeen: this.lastSeen ? new Date(this.lastSeen).toISOString() : null,
+      silentForMs: Number.isFinite(silentForMs) ? silentForMs : null,
+      staleAfterMs: this.staleAfterMs,
       port: this.port
     };
   }
@@ -239,6 +284,16 @@ export class WebSocketHub {
     // the capability gate.
     this.policy.assertAllowed(action);
 
+    if (this.isStale()) {
+      return Promise.reject(
+        new Error(
+          `BrowserPilot Chrome Extension stopped responding ${Math.round(this.silentForMs() / 1000)}s ago ` +
+            '(no heartbeat received). The tab or laptop may be asleep — open the extension popup and click Connect, ' +
+            'then retry.'
+        )
+      );
+    }
+
     if (!this.isConnected()) {
       return Promise.reject(
         new Error(
@@ -250,6 +305,7 @@ export class WebSocketHub {
 
     const id = `cmd_${Date.now()}_${++this.requestCounter}`;
     const command: CommandRequest = { id, action, params };
+    const socket = this.activeClient!;
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -257,10 +313,10 @@ export class WebSocketHub {
         reject(new Error(`Command '${action}' timed out after ${timeoutMs / 1000}s`));
       }, timeoutMs);
 
-      this.pendingRequests.set(id, { resolve, reject, timer });
+      this.pendingRequests.set(id, { resolve, reject, timer, socket });
 
       try {
-        this.activeClient!.send(JSON.stringify(command));
+        socket.send(JSON.stringify(command));
       } catch (err) {
         clearTimeout(timer);
         this.pendingRequests.delete(id);

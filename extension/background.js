@@ -18,8 +18,9 @@ async function setupOffscreenDocument() {
 
     await chrome.offscreen.createDocument({
       url: OFFSCREEN_DOCUMENT_PATH,
-      reasons: ['BLOBS', 'LOCAL_STORAGE'],
-      justification: 'Maintain continuous outbound WebSocket bridge for VPS AI Agent automation'
+      reasons: ['BLOBS', 'LOCAL_STORAGE', 'CLIPBOARD'],
+      justification:
+        'Maintain the outbound WebSocket bridge for VPS AI Agent automation and service clipboard read/write commands'
     });
     console.log('[BrowserPilot Background] Offscreen document created.');
   } catch (err) {
@@ -237,6 +238,7 @@ function revokeTabAccess(tabId) {
 // Cleanup on tab removal
 chrome.tabs.onRemoved.addListener((tabId) => {
   revokeTabAccess(tabId);
+  dialogHookInstalledFor.delete(tabId);
   if (pendingPermissionRequests.has(tabId)) {
     const cb = pendingPermissionRequests.get(tabId);
     pendingPermissionRequests.delete(tabId);
@@ -584,6 +586,7 @@ async function handleCommand(action, params = {}) {
     case 'request_tab_access':
       return handleRequestTabAccess(params);
     case 'handle_dialog':
+      return handleDialogCommand(params);
     case 'upload_file':
     case 'label_elements':
     case 'read_page':
@@ -916,6 +919,98 @@ async function getActiveTab() {
   throw new Error('No open browser tabs found');
 }
 
+const DIALOG_DEFAULTS = { policy: 'dismiss', promptText: '' };
+// tabId -> URL the hook was installed for. A navigation replaces the document,
+// so the hook has to be re-injected; without this bookkeeping every single
+// command would pay for another world injection.
+const dialogHookInstalledFor = new Map();
+
+async function getDialogConfig() {
+  try {
+    const data = await chrome.storage.local.get(['dialogPolicy', 'dialogPromptText']);
+    const policy = data.dialogPolicy === 'accept' ? 'accept' : 'dismiss';
+    return { policy, promptText: typeof data.dialogPromptText === 'string' ? data.dialogPromptText : '' };
+  } catch {
+    return { ...DIALOG_DEFAULTS };
+  }
+}
+
+/**
+ * Installs (or reconfigures) the MAIN-world dialog hook.
+ *
+ * Native alert/confirm/prompt are synchronous, so they cannot wait for the
+ * agent; the hook resolves them from this policy. Injecting into MAIN is the
+ * only way to affect the page's own dialog functions.
+ */
+async function installDialogHook(tabId, config) {
+  try {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    const url = tab?.url || '';
+    if (dialogHookInstalledFor.get(tabId) !== url) {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        files: ['dialog-hook.js']
+      });
+      dialogHookInstalledFor.set(tabId, url);
+    }
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: (cfg) => {
+        window.__browserpilotDialogConfig = cfg;
+      },
+      args: [config]
+    });
+    return true;
+  } catch (err) {
+    // Restricted pages (chrome://, the Web Store, PDF viewer) refuse injection.
+    // Expected, not alarming — the command itself will report the failure.
+    dialogHookInstalledFor.delete(tabId);
+    console.debug('[BrowserPilot Background] Could not install dialog hook:', err.message);
+    return false;
+  }
+}
+
+async function readLastDialog(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => {
+        const log = window.__browserpilotDialogLog;
+        return Array.isArray(log) && log.length > 0 ? log[log.length - 1] : null;
+      }
+    });
+    return results?.[0]?.result || null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleDialogCommand({ action = 'accept', promptText = '', tabId } = {}) {
+  const targetTab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : await getActiveTab().catch(() => null);
+  if (!targetTab || !targetTab.id) {
+    throw new Error('No target browser tab found for dialog handling');
+  }
+
+  const policy = action === 'accept' ? 'accept' : 'dismiss';
+  const config = { policy, promptText: typeof promptText === 'string' ? promptText : '' };
+  await chrome.storage.local.set({ dialogPolicy: config.policy, dialogPromptText: config.promptText });
+
+  const installed = await installDialogHook(targetTab.id, config);
+  const lastDialog = installed ? await readLastDialog(targetTab.id) : null;
+
+  return {
+    ok: true,
+    policySet: installed ? policy : null,
+    handledDialog: lastDialog,
+    message: installed
+      ? `Dialog policy set to "${policy}". Future alert/confirm/prompt calls on Tab #${targetTab.id} are auto-resolved.`
+      : `Could not install the dialog hook on Tab #${targetTab.id} (restricted page). Dialogs were not intercepted.`
+  };
+}
+
 async function ensureContentScriptInjected(tabId) {
   try {
     // Ping content script
@@ -929,11 +1024,15 @@ async function ensureContentScriptInjected(tabId) {
     if (!pong) {
       await chrome.scripting.executeScript({
         target: { tabId },
-        files: ['content.js']
+        files: ['dom-utils.js', 'content.js']
       });
       // Allow brief moment for content script to bind listeners
       await new Promise((r) => setTimeout(r, 100));
     }
+
+    // Keep the MAIN-world dialog hook present with the current policy, so a
+    // page cannot freeze the tab mid-automation even before the agent asks.
+    await installDialogHook(tabId, await getDialogConfig());
   } catch (err) {
     console.warn('[BrowserPilot Background] Script injection notice:', err.message);
   }
@@ -1038,7 +1137,11 @@ async function waitForNetworkIdle({ tabId, idleTimeMs = 500, timeoutMs = 15000 }
 }
 
 async function getClipboardContent() {
-  // Read clipboard text from active tab or offscreen document
+  const failures = [];
+
+  // The clipboard API needs a focused document. Try the focused tab first, then
+  // the offscreen document, and report *why* it failed instead of pretending
+  // the clipboard is empty.
   const activeTab = await getActiveTab().catch(() => null);
   if (activeTab && activeTab.id) {
     try {
@@ -1046,31 +1149,43 @@ async function getClipboardContent() {
         target: { tabId: activeTab.id },
         func: async () => {
           try {
-            return await navigator.clipboard.readText();
+            return { text: await navigator.clipboard.readText() };
           } catch (e) {
-            return { __clipboard_error: e.message || String(e) };
+            return { error: e.message || String(e) };
           }
         }
       });
       const res = results?.[0]?.result;
-      if (res && typeof res === 'object' && res.__clipboard_error) {
-        throw new Error(res.__clipboard_error);
+      if (res && res.error) {
+        failures.push(`tab: ${res.error}`);
+      } else if (res && typeof res.text === 'string') {
+        return { text: res.text };
       }
-      return { text: typeof res === 'string' ? res : '' };
     } catch (e) {
-      console.warn('[BrowserPilot Background] Scripting clipboard read failed, falling back:', e.message);
+      failures.push(`tab: ${e.message}`);
     }
   }
 
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: 'OFFSCREEN_READ_CLIPBOARD' }, (response) => {
-      if (response && response.text !== undefined) {
-        resolve({ text: response.text });
-      } else {
-        resolve({ text: '', note: 'Clipboard empty or access denied' });
-      }
-    });
+  const offscreen = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'OFFSCREEN_READ_CLIPBOARD' }, (response) => resolve(response));
   });
+
+  // `error` must be checked first: a failed read also carries `text: ''`, which
+  // would otherwise be reported as a genuinely empty clipboard.
+  if (offscreen && offscreen.error) {
+    failures.push(`offscreen: ${offscreen.error}`);
+  } else if (offscreen && typeof offscreen.text === 'string') {
+    return { text: offscreen.text };
+  }
+
+  return {
+    text: '',
+    denied: true,
+    note:
+      'Clipboard read was blocked by the browser (it needs a focused window with clipboard permission). ' +
+      'Focus the browser window and retry. ' +
+      (failures.length ? `Details: ${failures.join('; ')}` : '')
+  };
 }
 
 async function setClipboardContent({ text = '' }) {
@@ -1090,11 +1205,14 @@ async function setClipboardContent({ text = '' }) {
     }
   }
 
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: 'OFFSCREEN_WRITE_CLIPBOARD', text }, (response) => {
-      resolve({ ok: true, textLength: text.length });
-    });
+  const response = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: 'OFFSCREEN_WRITE_CLIPBOARD', text }, (res) => resolve(res));
   });
+
+  if (response && response.ok === false) {
+    throw new Error(`Clipboard write was blocked by the browser: ${response.error || 'unknown error'}`);
+  }
+  return { ok: true, textLength: text.length };
 }
 
 async function listRecentDownloads({ limit = 10, state }) {

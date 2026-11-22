@@ -1,30 +1,11 @@
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
 import { BrowserActionType, BrowserDispatcher } from './types.js';
-import { DEFAULT_PORT, readConfiguredToken } from './config.js';
+import { DEFAULT_PORT, loadProjectEnvFiles, readConfiguredToken } from './config.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Search for .env files in order of priority:
-// 1. Process cwd .env
-// 2. /mcp-server/.env (relative to dist)
-// 3. Project root .env
-// 4. ~/.browserpilot/.env
-const potentialEnvPaths = [
-  path.resolve(process.cwd(), '.env'),
-  path.resolve(__dirname, '..', '.env'),
-  path.resolve(__dirname, '..', '..', '.env'),
-  path.join(process.env.HOME || '/root', '.browserpilot', '.env')
-];
-
-for (const envPath of potentialEnvPaths) {
-  if (fs.existsSync(envPath)) {
-    dotenv.config({ path: envPath });
-  }
-}
+// Same resolution order as the daemon (cwd, mcp-server, repository root). The
+// user-level token in ~/.browserpilot/.env is read by readConfiguredToken()
+// rather than dumped into the environment.
+loadProjectEnvFiles();
 
 export class DaemonClient implements BrowserDispatcher {
   private port: number;
@@ -151,7 +132,8 @@ export class DaemonClient implements BrowserDispatcher {
       clearTimeout(timer);
 
       if (!res.ok) {
-        if (res.status === 401) {
+        if (res.status === 401 || res.status === 403) {
+          // The endpoint answered, so keep it cached; just report the cause.
           throw new Error(
             'BrowserPilot rejected the request (401 Unauthorized). The daemon SECRET_TOKEN and the token ' +
               'used by this client do not match — run `bp doctor` to inspect both sides.'
@@ -178,11 +160,19 @@ export class DaemonClient implements BrowserDispatcher {
       if (err.name === 'AbortError') {
         throw new Error(`Command '${action}' timed out after ${timeoutMs}ms waiting for browser response.`);
       }
-      if (err.cause?.code === 'ECONNREFUSED' || err.message?.includes('ECONNREFUSED')) {
+      const code = err.cause?.code || err.code || '';
+      if (code === 'ECONNREFUSED') {
         // Invalidate cached URL and suggest remediation
         this.cachedBaseUrl = null;
         throw new Error(
           `BrowserPilot daemon is unreachable at ${baseUrl}. Ensure the service is active (e.g., 'fire start browserpilot' or check 'bp doctor').`
+        );
+      }
+      if (code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'ETIMEDOUT' || code === 'EHOSTUNREACH') {
+        // Usually a stale tunnel hostname: re-resolve the endpoint next call.
+        this.cachedBaseUrl = null;
+        throw new Error(
+          `BrowserPilot daemon is unreachable at ${baseUrl} (${code}). The tunnel or IP may have changed — retry, or run 'bp tunnel url'.`
         );
       }
       throw err;

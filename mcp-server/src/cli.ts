@@ -378,13 +378,16 @@ async function runRead(args: string[]) {
     if (isInteractive && Array.isArray(res.elements)) {
       console.log(`\n${colors.bold}${colors.cyan}Interactive Elements (${res.elements.length} found):${colors.reset}\n`);
       for (const el of res.elements) {
-        const tag = el.tagName?.toLowerCase() || 'elem';
+        const tag = (el.tagName || el.tag)?.toLowerCase() || 'elem';
         const typeStr = el.type ? `[type="${el.type}"]` : '';
         const nameStr = el.name ? `[name="${el.name}"]` : '';
         const idStr = el.id ? `#${el.id}` : '';
         const textStr = el.text ? `"${el.text.slice(0, 40)}"` : '';
         const valStr = el.value ? `(val: "${el.value.slice(0, 30)}")` : '';
-        console.log(`  ${colors.green}•${colors.reset} ${colors.bold}${tag}${idStr}${nameStr}${typeStr}${colors.reset} ${colors.yellow}${textStr}${colors.reset} ${colors.dim}${valStr}${colors.reset}`);
+        const idxStr = typeof el.index === 'number' ? `${colors.dim}[${el.index}]${colors.reset} ` : '';
+        console.log(
+          `  ${colors.green}•${colors.reset} ${idxStr}${colors.bold}${tag}${idStr}${nameStr}${typeStr}${colors.reset} ${colors.yellow}${textStr}${colors.reset} ${colors.dim}${valStr}${colors.reset}`
+        );
       }
       console.log('');
     } else {
@@ -420,7 +423,7 @@ async function runClick(args: string[]) {
     }
     console.log(`${colors.dim}Clicking on "${target}"...${colors.reset}`);
     const res = await client.dispatch('click', params);
-    console.log(`${colors.green}✔ Clicked: ${res.message || 'success'}${colors.reset}\n`);
+    console.log(`${colors.green}✔ Clicked: ${res?.description || res?.message || target}${colors.reset}\n`);
   } catch (err: any) {
     console.error(`\n${colors.red}Error clicking element:${colors.reset} ${err.message}\n`);
     process.exit(1);
