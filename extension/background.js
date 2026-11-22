@@ -626,7 +626,7 @@ async function listTabs() {
   }));
 }
 
-async function navigateTab({ url, newTab = false, tabId }) {
+async function navigateTab({ url, newTab = false, tabId } = {}) {
   let targetTabId = tabId;
 
   if (newTab || !targetTabId) {
@@ -661,7 +661,7 @@ async function navigateTab({ url, newTab = false, tabId }) {
   };
 }
 
-async function switchTab({ tabId }) {
+async function switchTab({ tabId } = {}) {
   const tab = await chrome.tabs.get(tabId);
   await chrome.tabs.update(tabId, { active: true });
   if (tab.windowId) {
@@ -674,7 +674,7 @@ async function switchTab({ tabId }) {
   };
 }
 
-async function closeTab({ tabId }) {
+async function closeTab({ tabId } = {}) {
   const targetId = tabId || (await getActiveTab()).id;
   await chrome.tabs.remove(targetId);
   revokeTabAccess(targetId);
@@ -1079,7 +1079,7 @@ async function waitForTabLoad(tabId, timeoutMs = 15000) {
 
 // --- Network Idle, Clipboard & Download Implementations ---
 
-async function waitForNetworkIdle({ tabId, idleTimeMs = 500, timeoutMs = 15000 }) {
+async function waitForNetworkIdle({ tabId, idleTimeMs = 500, timeoutMs = 15000 } = {}) {
   const targetTab = tabId ? await chrome.tabs.get(tabId) : await getActiveTab();
   if (!targetTab || !targetTab.id) {
     throw new Error('No target tab found to wait for network idle');
@@ -1188,7 +1188,7 @@ async function getClipboardContent() {
   };
 }
 
-async function setClipboardContent({ text = '' }) {
+async function setClipboardContent({ text = '' } = {}) {
   const activeTab = await getActiveTab().catch(() => null);
   if (activeTab && activeTab.id) {
     try {
@@ -1215,7 +1215,7 @@ async function setClipboardContent({ text = '' }) {
   return { ok: true, textLength: text.length };
 }
 
-async function listRecentDownloads({ limit = 10, state }) {
+async function listRecentDownloads({ limit = 10, state } = {}) {
   if (!chrome.downloads) {
     throw new Error('Downloads API not available');
   }
@@ -1241,7 +1241,7 @@ async function listRecentDownloads({ limit = 10, state }) {
   }));
 }
 
-async function waitForDownloadComplete({ downloadId, filenamePattern, timeoutMs = 30000 }) {
+async function waitForDownloadComplete({ downloadId, filenamePattern, timeoutMs = 30000 } = {}) {
   if (!chrome.downloads) {
     throw new Error('Downloads API not available');
   }

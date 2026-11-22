@@ -218,7 +218,7 @@
   }
 
   // --- 1. Read Page Content ---
-  function extractPageContent({ format = 'markdown', maxLength = 15000 }) {
+  function extractPageContent({ format = 'markdown', maxLength = 15000 } = {}) {
     const title = document.title || '';
     const url = window.location.href;
 
@@ -370,7 +370,7 @@
   }
 
   // --- 2. Click Element ---
-  async function clickElement({ selector, text, x, y, index, label, humanize = false }) {
+  async function clickElement({ selector, text, x, y, index, label, humanize = false } = {}) {
     let el = null;
 
     if (typeof label === 'number') {
@@ -471,7 +471,7 @@
   }
 
   // --- 3. Type Into Element ---
-  async function typeIntoElement({ selector, text, clear = false, pressEnter = false, humanize = false }) {
+  async function typeIntoElement({ selector, text, clear = false, pressEnter = false, humanize = false } = {}) {
     let el = null;
 
     if (selector) {
@@ -570,14 +570,14 @@
   }
 
   // --- 4. Press Key ---
-  async function pressKey({ key }) {
+  async function pressKey({ key } = {}) {
     const target = document.activeElement || document.body;
     dispatchKeyEvent(target, key);
     return { ok: true, activeElement: target.tagName.toLowerCase() };
   }
 
   // --- 5. Scroll Page ---
-  async function scrollPage({ direction = 'down', amount = 600, selector }) {
+  async function scrollPage({ direction = 'down', amount = 600, selector } = {}) {
     if (selector) {
       const el = document.querySelector(selector);
       if (el) {
@@ -602,7 +602,7 @@
   }
 
   // --- 6. Upload File To Input ---
-  async function uploadFileToInput({ selector, filename = 'upload.dat', mimeType = 'application/octet-stream', base64Data }) {
+  async function uploadFileToInput({ selector, filename = 'upload.dat', mimeType = 'application/octet-stream', base64Data } = {}) {
     let el = selector ? document.querySelector(selector) : null;
     if (!el) {
       el = document.querySelector('input[type="file"]');
@@ -745,7 +745,7 @@
   }
 
   // --- 8. Evaluate Script ---
-  async function evaluateScript({ script }) {
+  async function evaluateScript({ script } = {}) {
     const fn = new Function(`return (${script});`);
     const res = fn();
     return res instanceof Promise ? await res : res;
