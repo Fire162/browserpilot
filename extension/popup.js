@@ -55,7 +55,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const autoConnect = autoConnectCheckbox.checked;
 
     if (!wsUrl) {
-      alert('Please enter a valid WebSocket endpoint URL (e.g., ws://<your-vps-ip>:8765)');
+      alert('Please enter a valid WebSocket endpoint URL (e.g., ws://<your-vps-ip>:8770)');
       wsUrlInput.focus();
       return;
     }

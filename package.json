@@ -6,7 +6,9 @@
   "scripts": {
     "server": "pnpm --filter browserpilot-mcp start",
     "dev": "pnpm --filter browserpilot-mcp dev",
-    "build": "pnpm --filter browserpilot-mcp build"
+    "build": "pnpm --filter browserpilot-mcp build",
+    "typecheck": "pnpm --filter browserpilot-mcp typecheck",
+    "test": "pnpm --filter browserpilot-mcp test"
   },
   "keywords": [
     "mcp",

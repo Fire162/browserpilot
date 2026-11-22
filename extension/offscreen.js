@@ -75,7 +75,9 @@ function connect(rawUrl, token) {
         }
 
         if (msg.action) {
-          console.log('[BrowserPilot Offscreen] Received action from VPS:', msg.action, msg.params);
+          // Never log params: they can contain typed passwords, card numbers or
+          // page content pasted via browser_type/browser_clipboard.
+          console.log('[BrowserPilot Offscreen] Received action from VPS:', msg.action);
           chrome.runtime.sendMessage(
             { type: 'EXECUTE_COMMAND', command: msg },
             (response) => {

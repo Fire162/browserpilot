@@ -14,6 +14,9 @@ This guide documents the real-world hurdles, edge cases, and architectural const
 6. [Screenshot Steals Tab Focus During Multitasking](#6-screenshot-steals-tab-focus-during-multitasking)
 7. [WebSocket Bridge Disconnects After 30 Seconds](#7-websocket-bridge-disconnects-after-30-seconds)
 8. [Firewall / ISP NAT Blocks Direct VPS Connection](#8-firewall--isp-nat-blocks-direct-vps-connection)
+9. [Every Tool Call Times Out Although the Extension Says "Connected"](#9-every-tool-call-times-out-although-the-extension-says-connected)
+10. [Native `alert` / `confirm` Freezes the Tab](#10-native-alert--confirm-freezes-the-tab)
+11. [`browser_clipboard` Returns Empty Text or Is Denied](#11-browser_clipboard-returns-empty-text-or-is-denied)
 
 ---
 
@@ -184,3 +187,50 @@ fire tunnel open 8770
 # Connect extension to: wss://<generated-subdomain>.yourdomain.com
 ```
 This provides automated SSL certificates, bypasses firewall barriers, and eliminates the need for open public ports.
+
+---
+
+### 9. Every Tool Call Times Out Although the Extension Says "Connected"
+
+#### 💥 Symptom
+The popup shows `Connected`, but every `browser_*` call waits its full timeout. `GET /status` reports `"stale": true` and a growing `silentForMs`.
+
+#### 🔍 Root Cause
+The WebSocket is half-open: the laptop slept, the network changed, or a NAT/tunnel mapping expired. The TCP socket still looks `OPEN` locally, but no frames reach the server.
+
+#### 💡 Solution
+The hub treats a bridge that has been silent for `BROWSERPILOT_STALE_AFTER_MS` (default `45000`, three missed 15-second heartbeats) as disconnected and fails immediately with an explanation instead of timing out. Open the extension popup, click **Disconnect → Connect**, then retry. Reduce the threshold for faster failure on flaky links:
+```bash
+# In mcp-server/.env
+BROWSERPILOT_STALE_AFTER_MS=30000
+```
+
+---
+
+### 10. Native `alert` / `confirm` Freezes the Tab
+
+#### 💥 Symptom
+A page calls `confirm("Delete everything?")`, the tab stops responding, and the next command times out.
+
+#### 🔍 Root Cause
+Native dialogs are modal and synchronous — the page cannot continue until a human clicks. No automation bridge can answer them asynchronously.
+
+#### 💡 Solution
+BrowserPilot installs `extension/dialog-hook.js` into the page's **MAIN** world, so the real `alert`/`confirm`/`prompt` are replaced and resolved instantly from a stored policy. Choose the policy before the dialog appears:
+```json
+{ "action": "dismiss" }   // safe default: confirm -> false, prompt -> null
+```
+Persist `accept` for flows that need to confirm through. "Leave site?" prompts are suppressed on automated tabs so navigation does not stall. Restricted pages (`chrome://`, the Web Store, PDF viewer) refuse injection; the tool reports that instead of claiming success.
+
+---
+
+### 11. `browser_clipboard` Returns Empty Text or Is Denied
+
+#### 💥 Symptom
+`browser_clipboard({ action: "read" })` fails with "Clipboard read was blocked by the browser".
+
+#### 🔍 Root Cause
+`navigator.clipboard.readText()` requires a focused document and a user gesture/permission granted to the extension. A background or minimised window has neither, and Chrome keeps the clipboard permission on the extension origin only while it is focused.
+
+#### 💡 Solution
+Focus the browser window (click inside it), then retry, or grant clipboard access for the extension in `chrome://extensions → BrowserPilot → Details`. Copying *into* the clipboard (`action: "write"`) works without focus. Note that neither direction can run on a restricted page.

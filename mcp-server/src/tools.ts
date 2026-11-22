@@ -1,8 +1,21 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserDispatcher } from './types.js';
+import { ActionPolicy } from './policy.js';
 
-export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) {
+/** Renders a consistent refusal for capabilities the operator has not enabled. */
+function denial(policy: ActionPolicy, action: 'run_code' | 'evaluate' | 'get_cookies') {
+  return {
+    isError: true,
+    content: [{ type: 'text' as const, text: `🔒 ${policy.denialMessage(action)}` }]
+  };
+}
+
+export function registerBrowserTools(
+  server: McpServer,
+  hub: BrowserDispatcher,
+  policy: ActionPolicy = ActionPolicy.fromEnv()
+) {
   // 1. browser_status
   server.tool(
     'browser_status',
@@ -386,7 +399,18 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
     async ({ tabId }) => {
       try {
         const result = await hub.dispatch('screenshot', { tabId }, 25000);
-        let base64Data = result.dataUrl || result.image;
+        let base64Data = result?.dataUrl || result?.image;
+        if (typeof base64Data !== 'string' || !base64Data.startsWith('data:image/')) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: 'The browser did not return image data. This usually means the tab was closed, minimised or showing a restricted page (chrome://, the Web Store, or a PDF viewer). Switch to a normal page and retry.'
+              }
+            ]
+          };
+        }
         if (base64Data.startsWith('data:image/jpeg;base64,')) {
           base64Data = base64Data.replace('data:image/jpeg;base64,', '');
           return {
@@ -446,6 +470,9 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       tabId: z.number().optional().describe('Target tab ID')
     },
     async ({ script, tabId }) => {
+      if (!policy.isEnabled('evaluate')) {
+        return denial(policy, 'evaluate');
+      }
       try {
         const result = await hub.dispatch('evaluate', { script, tabId }, 25000);
         return {
@@ -474,6 +501,9 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       tabId: z.number().optional().describe('Target tab ID')
     },
     async ({ code, tabId }) => {
+      if (!policy.isEnabled('run_code')) {
+        return denial(policy, 'run_code');
+      }
       try {
         const result = await hub.dispatch('run_code', { code, tabId }, 30000);
         return {
@@ -501,6 +531,9 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       tabId: z.number().optional().describe('Target tab ID')
     },
     async ({ tabId }) => {
+      if (!policy.isEnabled('get_cookies')) {
+        return denial(policy, 'get_cookies');
+      }
       try {
         const result = await hub.dispatch('get_cookies', { tabId }, 15000);
         return {
@@ -587,23 +620,26 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
   // 17. browser_handle_dialog
   server.tool(
     'browser_handle_dialog',
-    'Intercept, accept, or dismiss native JavaScript dialogs (alert, confirm, prompt, beforeunload) and configure auto-handling policies to prevent tab freezing.',
+    'Configure how native JavaScript dialogs (alert, confirm, prompt) are auto-resolved in the page so they cannot freeze the tab. Native dialogs are synchronous and cannot wait for the agent, so the chosen action is applied immediately to every future dialog on that tab.',
     {
-      action: z.enum(['accept', 'dismiss']).optional().describe("Action to take on pending or future dialogs (default 'accept')"),
-      promptText: z.string().optional().describe("Text value to submit into window.prompt dialogs (default '')"),
-      setPolicy: z.boolean().optional().describe('If true, sets persistent policy for all future dialogs on the page (default false)'),
-      tabId: z.number().optional().describe('Target tab ID')
+      action: z.enum(['accept', 'dismiss']).optional().describe("How future dialogs resolve: 'accept' returns true/submits promptText, 'dismiss' returns false/null (default 'accept')"),
+      promptText: z.string().optional().describe("Text value submitted into window.prompt dialogs when action is 'accept' (default '')"),
+      setPolicy: z.boolean().optional().describe('Accepted for backwards compatibility; the policy is always persisted now'),
+      tabId: z.number().optional().describe('Target tab ID (defaults to the active tab)')
     },
-    async ({ action = 'accept', promptText = '', setPolicy = false, tabId }) => {
+    async ({ action = 'accept', promptText = '', tabId }) => {
       try {
-        const result = await hub.dispatch('handle_dialog', { action, promptText, setPolicy, tabId }, 15000);
+        const result = await hub.dispatch('handle_dialog', { action, promptText, tabId }, 15000);
         return {
           content: [
             {
               type: 'text',
               text: result.policySet
-                ? `✅ Dialog policy set to "${result.policySet}". Future alerts/confirms/prompts will be automatically handled.`
-                : `✅ ${result.message || 'Dialog action processed successfully.'}`
+                ? `✅ Dialog policy set to "${result.policySet}". Future alerts/confirms/prompts on this tab are auto-resolved.` +
+                  (result.handledDialog
+                    ? `\nLast intercepted dialog: [${result.handledDialog.type}] "${result.handledDialog.message}" → ${result.handledDialog.resolvedWith}`
+                    : '')
+                : `⚠️ ${result.message || 'Dialog policy could not be applied to this tab.'}`
             }
           ]
         };
@@ -659,6 +695,17 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       try {
         if (action === 'read') {
           const result = await hub.dispatch('get_clipboard', {}, 15000);
+          if (result.denied) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: 'text',
+                  text: `Clipboard read was blocked by the browser. ${result.note || 'Focus the browser window and retry.'}`
+                }
+              ]
+            };
+          }
           return {
             content: [
               {

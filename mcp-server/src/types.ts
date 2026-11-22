@@ -9,31 +9,46 @@ export interface BrowserTab {
   isApproved?: boolean;
 }
 
-export type BrowserActionType =
-  | 'status'
-  | 'list_tabs'
-  | 'navigate'
-  | 'switch_tab'
-  | 'close_tab'
-  | 'close_tabs'
-  | 'read_page'
-  | 'click'
-  | 'type'
-  | 'press_key'
-  | 'scroll'
-  | 'screenshot'
-  | 'evaluate'
-  | 'run_code'
-  | 'get_cookies'
-  | 'upload_file'
-  | 'label_elements'
-  | 'handle_dialog'
-  | 'wait_for_network_idle'
-  | 'get_clipboard'
-  | 'set_clipboard'
-  | 'list_downloads'
-  | 'wait_for_download'
-  | 'request_tab_access';
+/**
+ * Canonical list of actions the daemon will forward to the extension.
+ * Keep this as the single source of truth: the HTTP dispatcher, the WebSocket
+ * policy and the tool layer all validate against it.
+ */
+export const BROWSER_ACTIONS = [
+  'status',
+  'list_tabs',
+  'navigate',
+  'switch_tab',
+  'close_tab',
+  'close_tabs',
+  'read_page',
+  'click',
+  'type',
+  'press_key',
+  'scroll',
+  'screenshot',
+  'evaluate',
+  'run_code',
+  'get_cookies',
+  'upload_file',
+  'label_elements',
+  'handle_dialog',
+  'wait_for_network_idle',
+  'get_clipboard',
+  'set_clipboard',
+  'list_downloads',
+  'wait_for_download',
+  'request_tab_access',
+  'reload_extension'
+] as const;
+
+export type BrowserActionType = (typeof BROWSER_ACTIONS)[number];
+
+const BROWSER_ACTION_SET: ReadonlySet<string> = new Set(BROWSER_ACTIONS);
+
+export function isBrowserAction(value: unknown): value is BrowserActionType {
+  return typeof value === 'string' && BROWSER_ACTION_SET.has(value);
+}
 
 export interface CommandRequest {
   id: string;
