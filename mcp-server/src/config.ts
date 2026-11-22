@@ -42,6 +42,8 @@ export interface DaemonConfig {
   tokenSource: 'env' | 'user-env' | 'generated';
   /** True when the operator supplied the old public default token. */
   usesLegacyDefaultToken: boolean;
+  /** Explicit opt-out that allows the known-public legacy token. */
+  allowInsecureToken: boolean;
   allowedOrigins: string[];
   allowCodeExecution: boolean;
   allowCookieAccess: boolean;
@@ -146,6 +148,30 @@ export function resolveSecretToken(options: { generate?: boolean } = {}): {
   return { token, source: 'generated' };
 }
 
+/**
+ * Fails closed on a missing or publicly known shared secret. Kept separate from
+ * `loadConfig` so it can be unit tested and so callers can decide when to run it.
+ */
+export function assertSecureConfig(config: DaemonConfig): void {
+  if (!config.secretToken) {
+    throw new Error(
+      'Refusing to start without a SECRET_TOKEN. Set SECRET_TOKEN in the environment or in ' +
+        `${USER_ENV_FILE}, then restart the daemon.`
+    );
+  }
+
+  if (config.usesLegacyDefaultToken && !config.allowInsecureToken) {
+    throw new Error(
+      'Refusing to start with the public default SECRET_TOKEN ("' +
+        LEGACY_DEFAULT_TOKEN +
+        '"). Anyone who reads this repository can control your browser with it.\n' +
+        'Remove the SECRET_TOKEN value from your environment/.env and restart — a strong token is ' +
+        `generated automatically and saved to ${USER_ENV_FILE} — then paste it into the extension popup.\n` +
+        'To keep the old value anyway (not recommended), set BROWSERPILOT_ALLOW_INSECURE_TOKEN=true.'
+    );
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
   const port = parsePort(env.WS_PORT || env.PORT, DEFAULT_PORT);
   const { token, source } = resolveSecretToken();
@@ -161,6 +187,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     secretToken: token,
     tokenSource: source,
     usesLegacyDefaultToken: token === LEGACY_DEFAULT_TOKEN,
+    allowInsecureToken: parseBoolean(env.BROWSERPILOT_ALLOW_INSECURE_TOKEN, false),
     allowedOrigins,
     allowCodeExecution: parseBoolean(env.ALLOW_CODE_EXECUTION, false),
     allowCookieAccess: parseBoolean(env.ALLOW_COOKIE_ACCESS, false),

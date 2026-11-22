@@ -315,7 +315,7 @@ Add BrowserPilot to your agent's MCP configuration:
 **Authentication**
 
 - There is **no built-in secret**. If `SECRET_TOKEN` is not set, the daemon generates a strong token on first start, stores it in `~/.browserpilot/.env` with `0600` permissions, and prints a masked hint. Read the file (or run `bp status`) to copy it into the extension popup.
-- The old placeholder value `browserpilot-secret` is **rejected**; if you still have it configured the daemon logs a warning and refuses to start. Rotate it.
+- The old placeholder value `browserpilot-secret` makes the daemon **refuse to start** (it is public knowledge). Remove it and restart to get a generated token; `BROWSERPILOT_ALLOW_INSECURE_TOKEN=true` is the explicit, discouraged opt-out for existing deployments.
 - Tokens are compared in constant time and failed attempts are rate limited (10 per minute per address by default), so the port cannot be brute-forced.
 
 **Network exposure**

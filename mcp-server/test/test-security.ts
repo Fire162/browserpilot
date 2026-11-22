@@ -14,7 +14,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebSocketHub } from '../src/websocket-hub.js';
 import { createHttpServer } from '../src/http-server.js';
 import { ActionPolicy, AuthRateLimiter, isOriginAllowed } from '../src/policy.js';
-import { DaemonConfig, generateToken, resolveSecretToken } from '../src/config.js';
+import { DaemonConfig, assertSecureConfig, generateToken, resolveSecretToken } from '../src/config.js';
 
 const TOKEN = 'test-token-0123456789';
 let passed = 0;
@@ -37,6 +37,7 @@ function makeConfig(overrides: Partial<DaemonConfig> = {}): DaemonConfig {
     secretToken: TOKEN,
     tokenSource: 'env',
     usesLegacyDefaultToken: false,
+    allowInsecureToken: false,
     allowedOrigins: [],
     allowCodeExecution: false,
     allowCookieAccess: false,
@@ -279,6 +280,33 @@ async function run() {
     assert.ok(a.length >= 32);
     assert.notEqual(a, b);
     assert.notEqual(a, 'browserpilot-secret');
+  });
+
+  await check('startup refuses an empty token (fail closed)', () => {
+    assert.throws(() => assertSecureConfig(makeConfig({ secretToken: '' })), /Refusing to start without a SECRET_TOKEN/);
+  });
+
+  await check('startup refuses the public legacy token by default', () => {
+    assert.throws(
+      () => assertSecureConfig(makeConfig({ secretToken: 'browserpilot-secret', usesLegacyDefaultToken: true })),
+      /public default SECRET_TOKEN/
+    );
+  });
+
+  await check('legacy token requires an explicit insecure opt-out', () => {
+    assert.doesNotThrow(() =>
+      assertSecureConfig(
+        makeConfig({
+          secretToken: 'browserpilot-secret',
+          usesLegacyDefaultToken: true,
+          allowInsecureToken: true
+        })
+      )
+    );
+  });
+
+  await check('a strong token passes startup validation', () => {
+    assert.doesNotThrow(() => assertSecureConfig(makeConfig()));
   });
 
   await check('a configured token wins over generation', () => {

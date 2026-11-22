@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
-* **No more built-in shared secret.** `SECRET_TOKEN` is now required; when it is unset the daemon generates a 48-character token, persists it to `~/.browserpilot/.env` with `0600` permissions, and prints only a masked hint. The public placeholder `browserpilot-secret` is rejected with a rotation warning, and tokens are compared with `crypto.timingSafeEqual`.
+* **No more built-in shared secret.** `SECRET_TOKEN` is now required; when it is unset the daemon generates a 48-character token, persists it to `~/.browserpilot/.env` with `0600` permissions, and prints only a masked hint. The public placeholder `browserpilot-secret` is refused at startup (override only with `BROWSERPILOT_ALLOW_INSECURE_TOKEN=true`), and tokens are compared with `crypto.timingSafeEqual`.
 * **Origin allow-list on every entry point.** HTTP requests and WebSocket handshakes with an untrusted `Origin` are refused (403) before authentication, and CORS is no longer `Access-Control-Allow-Origin: *`. This closes DNS-rebinding and localhost-probing attacks from arbitrary web pages. Extend the list with `BROWSERPILOT_ALLOWED_ORIGINS`.
 * **Capability gate for dangerous tools.** `browser_run_code` and `browser_evaluate` require `ALLOW_CODE_EXECUTION=true`; `browser_get_cookies` requires `ALLOW_COOKIE_ACCESS=true`. Both are **off by default** and enforced at the single dispatch choke point, so HTTP, SSE, stdio and CLI callers cannot bypass them. `GET /status` reports the effective posture.
 * **Action allow-list.** `/api/dispatch` rejects unknown actions (`400 UNKNOWN_ACTION`) instead of forwarding arbitrary strings to the extension.
@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 * `test/test-security.ts` — 24 regression checks covering the origin gate, token handling, rate limiting, action allow-list, capability gate, body caps, SSE crash-safety and the WebSocket handshake.
 * `pnpm test` / `pnpm typecheck` scripts; the server version is read from `package.json` instead of a hardcoded literal.
-* `BROWSERPILOT_BIND`, `BROWSERPILOT_ALLOWED_ORIGINS`, `BROWSERPILOT_MAX_BODY_BYTES`, `BROWSERPILOT_AUTH_*`, `ALLOW_CODE_EXECUTION` and `ALLOW_COOKIE_ACCESS` documented in `mcp-server/.env.example`.
+* `BROWSERPILOT_BIND`, `BROWSERPILOT_ALLOWED_ORIGINS`, `BROWSERPILOT_ALLOW_INSECURE_TOKEN`, `BROWSERPILOT_MAX_BODY_BYTES`, `BROWSERPILOT_AUTH_*`, `ALLOW_CODE_EXECUTION` and `ALLOW_COOKIE_ACCESS` documented in `mcp-server/.env.example`.
 
 ### Changed
 * Port examples in the README and popup helper text now consistently use `8770` (the code default) instead of a mix of `8765`/`8770`.

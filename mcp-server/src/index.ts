@@ -3,7 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import dotenv from 'dotenv';
 import { WebSocketHub } from './websocket-hub.js';
 import { registerBrowserTools } from './tools.js';
-import { loadConfig, DaemonConfig, SERVER_VERSION, USER_ENV_FILE } from './config.js';
+import { assertSecureConfig, loadConfig, DaemonConfig, SERVER_VERSION, USER_ENV_FILE } from './config.js';
 import { ActionPolicy, AuthRateLimiter } from './policy.js';
 import { createHttpServer } from './http-server.js';
 
@@ -21,22 +21,12 @@ function createConfiguredMcpServer(hub: WebSocketHub): McpServer {
   return server;
 }
 
-function assertStartupSafety(config: DaemonConfig): void {
-  if (!config.secretToken) {
-    throw new Error(
-      'Refusing to start without a SECRET_TOKEN. Set SECRET_TOKEN in the environment or in ' +
-        `${USER_ENV_FILE}, then restart the daemon.`
-    );
-  }
+function reportStartupPosture(config: DaemonConfig): void {
+  assertSecureConfig(config);
 
   if (config.usesLegacyDefaultToken) {
-    console.error('');
-    console.error('⚠️  SECURITY: SECRET_TOKEN is set to the public default value, which is');
-    console.error('   documented in this repository and known to everyone.');
-    console.error('   Rotate it now:  delete the SECRET_TOKEN line from your environment/.env,');
-    console.error('   restart the daemon (a strong token is generated automatically), and');
-    console.error('   paste the new token into the extension popup.');
-    console.error('');
+    console.error('⚠️  Running with the public legacy token because BROWSERPILOT_ALLOW_INSECURE_TOKEN=true.');
+    console.error('   Rotate it as soon as possible.');
   }
 
   if (config.bindHost !== '127.0.0.1' && config.bindHost !== 'localhost' && config.bindHost !== '::1') {
@@ -54,7 +44,7 @@ async function main() {
   console.error('🚀 Starting BrowserPilot Daemon & MCP Server...');
   console.error('====================================================');
 
-  assertStartupSafety(config);
+  reportStartupPosture(config);
 
   const policy = new ActionPolicy({
     allowCodeExecution: config.allowCodeExecution,
