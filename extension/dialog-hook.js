@@ -24,10 +24,10 @@
     if (window.__browserpilotDialogHookInstalled) {
       return;
     }
+    const HOOK_VERSION = 1;
     window.__browserpilotDialogHookInstalled = true;
     window.__browserpilotDialogHookVersion = HOOK_VERSION;
 
-    const HOOK_VERSION = 1;
     const MAX_LOG = 20;
     const log = [];
     window.__browserpilotDialogLog = log;
