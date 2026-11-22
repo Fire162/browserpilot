@@ -92,69 +92,151 @@ if (chrome.webRequest) {
   );
 }
 
-// Reset active requests on tab navigation to prevent stale network idle hangs
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+// Reset active requests on tab navigation to prevent stale network idle hangs,
+// and re-validate tab grants whenever the page's origin can change.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'loading') {
     activeRequestsByTab.delete(tabId);
+  }
+
+  const grant = getGrant(tabId);
+  if (!grant) return;
+
+  const currentUrl = changeInfo.url || tab?.url || '';
+  const origin = normalizeOrigin(currentUrl);
+  if (!origin) return; // opaque/transitional page — leave the grant alone
+
+  if (grant.kind === 'agent') {
+    // The agent owns this tab; follow it across origins.
+    if (grant.origin !== origin) {
+      grant.origin = origin;
+      savePrivacyState();
+    }
+    return;
+  }
+
+  // A user grant is scoped to the exact origin that was approved.
+  if (origin !== grant.origin) {
+    console.warn(`[BrowserPilot Background] Revoked tab grant for #${tabId}: navigated to ${origin}`);
+    revokeTabAccess(tabId);
   }
 });
 
 // --- Hybrid Privacy & Tab Permission Engine ---
 let privacyMode = 'hybrid'; // 'hybrid' | 'full' | 'sandbox'
-const agentOwnedTabs = new Set();
-const approvedUserTabs = new Set();
+// Grants are keyed by tab id, but every lookup re-validates the tab's *current*
+// origin. Tab ids are recycled across browser restarts, and an approved tab can
+// navigate somewhere else, so an id-based approval on its own is not a
+// permission boundary.
+const tabGrants = new Map(); // tabId -> { origin: string, kind: 'agent' | 'user', grantedAt: number }
 const pendingPermissionRequests = new Map();
+let privacyStateReady = Promise.resolve();
+
+/** Origin used for grant comparison. Opaque schemes (chrome://, file://) get ''. */
+function normalizeOrigin(url) {
+  try {
+    const parsed = new URL(url || '');
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.origin;
+    }
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return '';
+  }
+}
 
 // Initialize privacy preferences & state
-chrome.storage.local.get(['privacyMode', 'approvedUserTabs', 'agentOwnedTabs'], (data) => {
-  if (data.privacyMode) {
-    privacyMode = data.privacyMode;
-  }
-  if (Array.isArray(data.approvedUserTabs)) {
-    data.approvedUserTabs.forEach((id) => approvedUserTabs.add(id));
-  }
-  if (Array.isArray(data.agentOwnedTabs)) {
-    data.agentOwnedTabs.forEach((id) => agentOwnedTabs.add(id));
-  }
+privacyStateReady = new Promise((resolve) => {
+  chrome.storage.local.get(['privacyMode', 'tabGrants'], (data) => {
+    if (data.privacyMode) {
+      privacyMode = data.privacyMode;
+    }
+    if (Array.isArray(data.tabGrants)) {
+      for (const entry of data.tabGrants) {
+        if (!Array.isArray(entry) || entry.length !== 2) continue;
+        const [rawId, grant] = entry;
+        const tabId = Number(rawId);
+        if (!Number.isInteger(tabId) || !grant || typeof grant.origin !== 'string') continue;
+        if (grant.kind !== 'agent' && grant.kind !== 'user') continue;
+        tabGrants.set(tabId, {
+          origin: grant.origin,
+          kind: grant.kind,
+          grantedAt: Number(grant.grantedAt) || Date.now()
+        });
+      }
+    }
+    resolve();
+  });
 });
 
 function savePrivacyState() {
   chrome.storage.local.set({
     privacyMode,
-    approvedUserTabs: Array.from(approvedUserTabs),
-    agentOwnedTabs: Array.from(agentOwnedTabs)
+    tabGrants: Array.from(tabGrants.entries())
   });
+  // Legacy keys stored bare tab ids with no URL, so they could be inherited by
+  // an unrelated tab after a restart. Drop them once migrated.
+  chrome.storage.local.remove(['approvedUserTabs', 'agentOwnedTabs']);
 }
 
-function isTabApproved(tabId) {
+function getGrant(tabId) {
+  return tabGrants.get(tabId) || null;
+}
+
+/**
+ * @param {{ id?: number, url?: string } | null} tab current tab snapshot
+ */
+function isTabApproved(tab) {
   if (privacyMode === 'full') return true;
-  if (agentOwnedTabs.has(tabId)) return true;
+  if (!tab || typeof tab.id !== 'number') return false;
+
+  const grant = getGrant(tab.id);
+  if (!grant) return false;
+  if (grant.kind === 'agent') return true; // agent-spawned tab, any mode
   if (privacyMode === 'sandbox') return false;
-  return approvedUserTabs.has(tabId);
+
+  const origin = normalizeOrigin(tab.url);
+  return Boolean(origin) && origin === grant.origin;
 }
 
-function markTabAsAgentOwned(tabId) {
-  agentOwnedTabs.add(tabId);
+function isTabAgentOwned(tabId) {
+  return getGrant(tabId)?.kind === 'agent';
+}
+
+function markTabAsAgentOwned(tabId, url) {
+  tabGrants.set(tabId, {
+    origin: normalizeOrigin(url),
+    kind: 'agent',
+    grantedAt: Date.now()
+  });
   savePrivacyState();
 }
 
-function approveTabAccess(tabId) {
-  approvedUserTabs.add(tabId);
+async function approveTabAccess(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) return false;
+  const origin = normalizeOrigin(tab.url);
+  if (!origin) return false; // opaque page (chrome://, file://) — not grantable
+
+  tabGrants.set(tabId, {
+    origin,
+    kind: 'user',
+    grantedAt: Date.now()
+  });
   savePrivacyState();
   chrome.tabs.sendMessage(tabId, { type: 'CLEAR_PERMISSION_BANNER' }).catch(() => {});
+  return true;
 }
 
 function revokeTabAccess(tabId) {
-  approvedUserTabs.delete(tabId);
-  agentOwnedTabs.delete(tabId);
+  if (!tabGrants.has(tabId)) return;
+  tabGrants.delete(tabId);
   savePrivacyState();
 }
 
 // Cleanup on tab removal
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (approvedUserTabs.has(tabId) || agentOwnedTabs.has(tabId)) {
-    revokeTabAccess(tabId);
-  }
+  revokeTabAccess(tabId);
   if (pendingPermissionRequests.has(tabId)) {
     const cb = pendingPermissionRequests.get(tabId);
     pendingPermissionRequests.delete(tabId);
@@ -182,13 +264,15 @@ async function handleRequestTabAccess({ tabId, reason, timeoutMs = 25000 } = {})
     throw new Error('No target browser tab found to request access');
   }
 
+  await privacyStateReady;
+
   const tid = targetTab.id;
-  if (isTabApproved(tid)) {
+  if (isTabApproved(targetTab)) {
     return {
       approved: true,
       tabId: tid,
       title: targetTab.title,
-      isAgentOwned: agentOwnedTabs.has(tid),
+      isAgentOwned: isTabAgentOwned(tid),
       message: 'Tab is already approved for agent access'
     };
   }
@@ -231,6 +315,7 @@ async function handleRequestTabAccess({ tabId, reason, timeoutMs = 25000 } = {})
 }
 
 async function checkCommandPermission(action, params = {}) {
+  await privacyStateReady;
   if (privacyMode === 'full') return;
 
   // Actions that never require tab authorization
@@ -243,15 +328,19 @@ async function checkCommandPermission(action, params = {}) {
     'set_clipboard',
     'list_downloads',
     'wait_for_download',
-    'switch_tab',
-    'close_tab',
-    'close_tabs'
+    'switch_tab'
   ].includes(action)) {
     return;
   }
 
   // Navigate with newTab: true always permitted (spawns an agent-owned tab)
   if (action === 'navigate' && params.newTab) {
+    return;
+  }
+
+  // Batch close is authorised per target tab inside closeMultipleTabs(); the
+  // generic path would wrongly gate on whichever tab happens to be active.
+  if (action === 'close_tabs') {
     return;
   }
 
@@ -265,12 +354,14 @@ async function checkCommandPermission(action, params = {}) {
     targetTabId = active.id;
   }
 
-  if (isTabApproved(targetTabId)) {
+  // Target tab is protected? Grants are always re-validated against the tab's
+  // live origin so a recycled tab id or a cross-origin navigation cannot inherit
+  // an old approval.
+  const targetTab = await chrome.tabs.get(targetTabId).catch(() => null);
+  if (isTabApproved(targetTab)) {
     return;
   }
 
-  // Target tab is protected
-  const targetTab = await chrome.tabs.get(targetTabId).catch(() => null);
   const tabTitle = targetTab?.title || 'Untitled';
   const tabUrl = targetTab?.url || '';
 
@@ -347,8 +438,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     sendResponse({
       privacyMode,
-      approvedUserTabs: Array.from(approvedUserTabs),
-      agentOwnedTabs: Array.from(agentOwnedTabs)
+      approvedUserTabs: Array.from(tabGrants.entries())
+        .filter(([, grant]) => grant.kind === 'user')
+        .map(([id]) => id),
+      agentOwnedTabs: Array.from(tabGrants.entries())
+        .filter(([, grant]) => grant.kind === 'agent')
+        .map(([id]) => id)
     });
     return false;
   }
@@ -371,14 +466,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'Unauthorized' });
       return false;
     }
-    approveTabAccess(msg.tabId);
-    if (pendingPermissionRequests.has(msg.tabId)) {
-      const cb = pendingPermissionRequests.get(msg.tabId);
-      pendingPermissionRequests.delete(msg.tabId);
-      cb(true);
-    }
-    sendResponse({ ok: true });
-    return false;
+    approveTabAccess(msg.tabId)
+      .then((granted) => {
+        if (pendingPermissionRequests.has(msg.tabId)) {
+          const cb = pendingPermissionRequests.get(msg.tabId);
+          pendingPermissionRequests.delete(msg.tabId);
+          cb(Boolean(granted));
+        }
+        sendResponse({ ok: Boolean(granted) });
+      })
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
   }
 
   if (msg.type === 'REVOKE_TAB') {
@@ -402,16 +500,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'Unauthorized: TAB_PERMISSION_RESPONSE must originate from sender.tab' });
       return false;
     }
+    const settle = () => {
+      if (pendingPermissionRequests.has(tabId)) {
+        const cb = pendingPermissionRequests.get(tabId);
+        pendingPermissionRequests.delete(tabId);
+        cb(Boolean(msg.approved));
+      }
+    };
+
     if (msg.approved) {
-      approveTabAccess(tabId);
-    } else {
-      revokeTabAccess(tabId);
+      approveTabAccess(tabId).then((granted) => {
+        settle();
+        sendResponse({ ok: Boolean(granted) });
+      }).catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
     }
-    if (pendingPermissionRequests.has(tabId)) {
-      const cb = pendingPermissionRequests.get(tabId);
-      pendingPermissionRequests.delete(tabId);
-      cb(Boolean(msg.approved));
-    }
+
+    revokeTabAccess(tabId);
+    settle();
     sendResponse({ ok: true });
     return false;
   }
@@ -503,6 +609,7 @@ async function getStatusInfo() {
 }
 
 async function listTabs() {
+  await privacyStateReady;
   const tabs = await chrome.tabs.query({});
   return tabs.map((t) => ({
     id: t.id,
@@ -511,8 +618,8 @@ async function listTabs() {
     active: t.active,
     windowId: t.windowId,
     favIconUrl: t.favIconUrl,
-    isAgentOwned: agentOwnedTabs.has(t.id),
-    isApproved: isTabApproved(t.id)
+    isAgentOwned: isTabAgentOwned(t.id),
+    isApproved: isTabApproved(t)
   }));
 }
 
@@ -523,7 +630,7 @@ async function navigateTab({ url, newTab = false, tabId }) {
     if (newTab) {
       const created = await chrome.tabs.create({ url });
       targetTabId = created.id;
-      markTabAsAgentOwned(targetTabId);
+      markTabAsAgentOwned(targetTabId, url);
     } else {
       const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       if (activeTab) {
@@ -532,7 +639,7 @@ async function navigateTab({ url, newTab = false, tabId }) {
       } else {
         const created = await chrome.tabs.create({ url });
         targetTabId = created.id;
-        markTabAsAgentOwned(targetTabId);
+        markTabAsAgentOwned(targetTabId, url);
       }
     }
   } else {
@@ -546,8 +653,8 @@ async function navigateTab({ url, newTab = false, tabId }) {
     tabId: targetTabId,
     title: updatedTab.title,
     url: updatedTab.url,
-    isAgentOwned: agentOwnedTabs.has(targetTabId),
-    isApproved: isTabApproved(targetTabId)
+    isAgentOwned: isTabAgentOwned(targetTabId),
+    isApproved: isTabApproved(updatedTab)
   };
 }
 
@@ -572,33 +679,61 @@ async function closeTab({ tabId }) {
 }
 
 async function closeMultipleTabs({ tabIds, match } = {}) {
-  let idsToClose = [];
+  await privacyStateReady;
+  const allTabs = await chrome.tabs.query({});
+  const byId = new Map(allTabs.map((t) => [t.id, t]));
+
+  let candidateIds = [];
   if (Array.isArray(tabIds) && tabIds.length > 0) {
-    idsToClose = tabIds;
+    candidateIds = tabIds;
   } else if (match) {
-    const allTabs = await chrome.tabs.query({});
     let regex;
     try {
       regex = new RegExp(match, 'i');
     } catch {
       regex = new RegExp(match.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
     }
-    idsToClose = allTabs
+    candidateIds = allTabs
       .filter((t) => regex.test(t.url || '') || regex.test(t.title || ''))
       .map((t) => t.id);
   }
 
-  if (idsToClose.length === 0) {
+  const closable = [];
+  const protectedIds = [];
+  for (const id of candidateIds) {
+    const tab = byId.get(id);
+    if (!tab) continue;
+    if (isTabApproved(tab)) {
+      closable.push(id);
+    } else {
+      protectedIds.push(id);
+    }
+  }
+
+  if (closable.length === 0 && protectedIds.length === 0) {
     return { ok: true, closedCount: 0, closedTabIds: [], message: 'No matching tabs found to close.' };
   }
 
-  await chrome.tabs.remove(idsToClose);
-  idsToClose.forEach((id) => revokeTabAccess(id));
+  if (closable.length === 0) {
+    throw new Error(
+      `PERMISSION_REQUIRED: ${protectedIds.length} matching tab(s) are protected user tabs ` +
+        `(#${protectedIds.join(', #')}). Ask the user for access with browser_request_tab_access before closing them.`
+    );
+  }
+
+  await chrome.tabs.remove(closable);
+  closable.forEach((id) => revokeTabAccess(id));
+
+  const skipped = protectedIds.length
+    ? ` Skipped ${protectedIds.length} protected tab(s) (#${protectedIds.join(', #')}).`
+    : '';
+
   return {
     ok: true,
-    closedCount: idsToClose.length,
-    closedTabIds: idsToClose,
-    message: `Successfully closed ${idsToClose.length} tab(s).`
+    closedCount: closable.length,
+    closedTabIds: closable,
+    skippedTabIds: protectedIds,
+    message: `Successfully closed ${closable.length} tab(s).${skipped}`
   };
 }
 

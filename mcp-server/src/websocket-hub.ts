@@ -1,7 +1,17 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage, Server as HttpServer } from 'http';
 import { URL } from 'url';
-import { BrowserActionType, CommandRequest, CommandResponse, WebSocketInboundMessage } from './types.js';
+import { BrowserActionType, CommandRequest, WebSocketInboundMessage } from './types.js';
+import { ActionPolicy, AuthRateLimiter, isOriginAllowed, timingSafeEqualStrings } from './policy.js';
+
+export interface WebSocketHubOptions {
+  /** Extra browser origins permitted to open the bridge socket. */
+  allowedOrigins?: string[];
+  /** Capability gate applied to every dispatched action. */
+  policy?: ActionPolicy;
+  /** Brute-force guard applied to failed handshakes. */
+  rateLimiter?: AuthRateLimiter;
+}
 
 interface PendingRequest {
   resolve: (value: any) => void;
@@ -17,18 +27,49 @@ export class WebSocketHub {
   private port: number;
   private lastSeen: number = 0;
   private requestCounter: number = 0;
+  private allowedOrigins: string[];
+  private policy: ActionPolicy;
+  private rateLimiter: AuthRateLimiter;
 
-  constructor(port: number = 8770, secretToken: string = 'browserpilot-secret') {
+  constructor(port: number = 8770, secretToken: string = '', options: WebSocketHubOptions = {}) {
     this.port = port;
+    // An empty token is rejected at handshake time (fail closed) rather than
+    // silently disabling authentication.
     this.secretToken = secretToken;
+    this.allowedOrigins = options.allowedOrigins || [];
+    this.policy = options.policy || new ActionPolicy({ allowCodeExecution: false, allowCookieAccess: false });
+    this.rateLimiter = options.rateLimiter || new AuthRateLimiter();
+  }
+
+  private verifyConnection(req: IncomingMessage): boolean {
+    const remote = req.socket?.remoteAddress || 'unknown';
+
+    if (this.rateLimiter.isBlocked(remote)) {
+      console.error(`[WebSocketHub] Rejected handshake from ${remote}: too many failed attempts.`);
+      return false;
+    }
+
+    const origin = req.headers.origin;
+    const originHeader = Array.isArray(origin) ? origin[0] : origin;
+    if (!isOriginAllowed(originHeader, this.allowedOrigins)) {
+      console.error(`[WebSocketHub] Rejected handshake from untrusted origin '${originHeader}'.`);
+      return false;
+    }
+
+    if (!this.authenticate(req)) {
+      this.rateLimiter.recordFailure(remote);
+      return false;
+    }
+
+    this.rateLimiter.reset(remote);
+    return true;
   }
 
   public attachToServer(server: HttpServer): void {
     this.wss = new WebSocketServer({
       server,
       verifyClient: (info, callback) => {
-        const isAuthorized = this.authenticate(info.req);
-        if (!isAuthorized) {
+        if (!this.verifyConnection(info.req)) {
           console.error('[WebSocketHub] Unauthorized connection attempt rejected.');
           callback(false, 401, 'Unauthorized');
           return;
@@ -46,8 +87,7 @@ export class WebSocketHub {
         this.wss = new WebSocketServer({
           port: this.port,
           verifyClient: (info, callback) => {
-            const isAuthorized = this.authenticate(info.req);
-            if (!isAuthorized) {
+            if (!this.verifyConnection(info.req)) {
               console.error('[WebSocketHub] Unauthorized connection attempt rejected.');
               callback(false, 401, 'Unauthorized');
               return;
@@ -122,12 +162,13 @@ export class WebSocketHub {
 
 
   public authenticate(req: IncomingMessage): boolean {
-    if (!this.secretToken) return true;
+    // Fail closed: without a configured token nothing is authorized.
+    if (!this.secretToken) return false;
 
     try {
       const parsedUrl = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
       const tokenInQuery = parsedUrl.searchParams.get('token');
-      if (tokenInQuery && tokenInQuery === this.secretToken) {
+      if (tokenInQuery && timingSafeEqualStrings(tokenInQuery, this.secretToken)) {
         return true;
       }
     } catch {
@@ -138,12 +179,20 @@ export class WebSocketHub {
     if (tokenHeader) {
       const headerStr = Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
       const cleanToken = headerStr.startsWith('Bearer ') ? headerStr.slice(7).trim() : headerStr.trim();
-      if (cleanToken === this.secretToken) {
+      if (timingSafeEqualStrings(cleanToken, this.secretToken)) {
         return true;
       }
     }
 
     return false;
+  }
+
+  public getPolicy(): ActionPolicy {
+    return this.policy;
+  }
+
+  public getAllowedOrigins(): string[] {
+    return this.allowedOrigins;
   }
 
   private handleInboundMessage(msg: WebSocketInboundMessage) {
@@ -179,11 +228,17 @@ export class WebSocketHub {
     };
   }
 
-  public dispatch<T = any>(
+  // `async` so that a policy rejection surfaces as a rejected promise rather
+  // than a synchronous throw from a method typed `Promise<T>`.
+  public async dispatch<T = any>(
     action: BrowserActionType,
     params: Record<string, any> = {},
     timeoutMs: number = 35000
   ): Promise<T> {
+    // Single choke point: no caller (HTTP, SSE, stdio, CLI bridge) can bypass
+    // the capability gate.
+    this.policy.assertAllowed(action);
+
     if (!this.isConnected()) {
       return Promise.reject(
         new Error(

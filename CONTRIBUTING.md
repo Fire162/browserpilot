@@ -20,9 +20,10 @@ Thank you for your interest in contributing to BrowserPilot!
    pnpm build
    ```
 
-4. Run tests:
+4. Run the test suite (typecheck + bridge + security regression tests):
    ```bash
-   pnpm --filter browserpilot-mcp exec tsx test/test-bridge.ts
+   pnpm typecheck
+   pnpm test
    ```
 
 ## Pull Request Guidelines

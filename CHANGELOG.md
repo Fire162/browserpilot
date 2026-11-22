@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+* **No more built-in shared secret.** `SECRET_TOKEN` is now required; when it is unset the daemon generates a 48-character token, persists it to `~/.browserpilot/.env` with `0600` permissions, and prints only a masked hint. The public placeholder `browserpilot-secret` is rejected with a rotation warning, and tokens are compared with `crypto.timingSafeEqual`.
+* **Origin allow-list on every entry point.** HTTP requests and WebSocket handshakes with an untrusted `Origin` are refused (403) before authentication, and CORS is no longer `Access-Control-Allow-Origin: *`. This closes DNS-rebinding and localhost-probing attacks from arbitrary web pages. Extend the list with `BROWSERPILOT_ALLOWED_ORIGINS`.
+* **Capability gate for dangerous tools.** `browser_run_code` and `browser_evaluate` require `ALLOW_CODE_EXECUTION=true`; `browser_get_cookies` requires `ALLOW_COOKIE_ACCESS=true`. Both are **off by default** and enforced at the single dispatch choke point, so HTTP, SSE, stdio and CLI callers cannot bypass them. `GET /status` reports the effective posture.
+* **Action allow-list.** `/api/dispatch` rejects unknown actions (`400 UNKNOWN_ACTION`) instead of forwarding arbitrary strings to the extension.
+* **Brute-force guard + body cap.** Failed authentication is limited to 10 attempts/minute per address (`429`), and request bodies are capped at 1 MB (`413`).
+* **CLI hardening.** `bp start` validates `--port`, launches the daemon with `spawn()` + an env object instead of `sh -c` string interpolation (no shell injection, no token in `ps`), writes the token file and log/pid files as `0600`, passes the port and token to Fire PM via `--env`, and no longer pipes the Fire PM installer into `sudo` (it downloads the script, prints its SHA-256, and asks you to run it).
+* **Tab permissions are origin-scoped.** Grants now store `{origin, kind}` and are re-validated against the tab's live origin on every command and on navigation, so recycled tab ids after a browser restart and cross-origin navigations can no longer inherit an old approval. `close_tab`/`close_tabs` are no longer exempt from the permission engine: protected user tabs must be approved before the agent can close them.
+
+### Fixed
+* **Daemon crash on bad requests.** The async HTTP handler is fully guarded; a failing `/sse` connect or `/message` post now returns `500` instead of becoming an unhandled rejection that terminated the process.
+* **Policy rejections reject instead of throwing** (`WebSocketHub.dispatch` is `async`), so callers using `.catch()` cannot crash on a gated action.
+* **Startup no longer prints the secret token** to the console/journal.
+
+### Added
+* `test/test-security.ts` — 24 regression checks covering the origin gate, token handling, rate limiting, action allow-list, capability gate, body caps, SSE crash-safety and the WebSocket handshake.
+* `pnpm test` / `pnpm typecheck` scripts; the server version is read from `package.json` instead of a hardcoded literal.
+* `BROWSERPILOT_BIND`, `BROWSERPILOT_ALLOWED_ORIGINS`, `BROWSERPILOT_MAX_BODY_BYTES`, `BROWSERPILOT_AUTH_*`, `ALLOW_CODE_EXECUTION` and `ALLOW_COOKIE_ACCESS` documented in `mcp-server/.env.example`.
+
+### Changed
+* Port examples in the README and popup helper text now consistently use `8770` (the code default) instead of a mix of `8765`/`8770`.
+
 ## [1.4.1] - 2026-10-16 21:10 IST
 
 ### Security

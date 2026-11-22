@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { BrowserActionType, BrowserDispatcher } from './types.js';
+import { DEFAULT_PORT, readConfiguredToken } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,19 +26,23 @@ for (const envPath of potentialEnvPaths) {
   }
 }
 
-const DEFAULT_PORT = parseInt(process.env.WS_PORT || process.env.PORT || '8770', 10);
-
 export class DaemonClient implements BrowserDispatcher {
   private port: number;
-  private secretToken: string;
+  private explicitToken: string;
   private cachedBaseUrl: string | null = null;
 
-  constructor(
-    port: number = DEFAULT_PORT,
-    secretToken: string = process.env.SECRET_TOKEN || 'browserpilot-secret'
-  ) {
-    this.port = port;
-    this.secretToken = secretToken;
+  constructor(port?: number, secretToken?: string) {
+    const envPort = process.env.WS_PORT || process.env.PORT;
+    this.port = port ?? (envPort ? Number(envPort) : DEFAULT_PORT);
+    this.explicitToken = secretToken || '';
+  }
+
+  /**
+   * Resolved on every request so a rotated token is picked up without a
+   * restart. There is deliberately no built-in fallback secret.
+   */
+  private resolveToken(): string {
+    return this.explicitToken || readConfiguredToken();
   }
 
   /**
@@ -132,12 +137,12 @@ export class DaemonClient implements BrowserDispatcher {
     const timer = setTimeout(() => controller.abort(), timeoutMs + 2000);
 
     try {
+      const token = this.resolveToken();
       const res = await fetch(`${baseUrl}/api/dispatch`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-token': this.secretToken,
-          'Authorization': `Bearer ${this.secretToken}`
+          ...(token ? { 'x-token': token, Authorization: `Bearer ${token}` } : {})
         },
         body: JSON.stringify({ action, params, timeoutMs }),
         signal: controller.signal
@@ -146,6 +151,12 @@ export class DaemonClient implements BrowserDispatcher {
       clearTimeout(timer);
 
       if (!res.ok) {
+        if (res.status === 401) {
+          throw new Error(
+            'BrowserPilot rejected the request (401 Unauthorized). The daemon SECRET_TOKEN and the token ' +
+              'used by this client do not match — run `bp doctor` to inspect both sides.'
+          );
+        }
         const text = await res.text().catch(() => '');
         let errMsg = `HTTP ${res.status}: ${res.statusText}`;
         try {

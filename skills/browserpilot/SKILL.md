@@ -41,9 +41,9 @@ All tools are registered under the MCP server name `browserpilot`:
 | `browser_press_key` | Send keyboard keys | Send keys like `Enter`, `Escape`, `Tab`, `ArrowDown`, `Backspace`. |
 | `browser_scroll` | Scroll page/element | Use `direction: "down"` or pass element `selector`. |
 | `browser_take_screenshot` | Capture visual viewport | Automatically preserves user active tab during background execution. |
-| `browser_evaluate` | Run JavaScript expression | Evaluates in extension world; avoid `eval()` on strict CSP pages. |
-| `browser_run_code` | 🚀 **Direct Code Execution** | Write & run async JS with full DOM access, immune to website CSP restrictions. |
-| `browser_get_cookies` | 🍪 Extract active cookies | Retrieve session credentials and auth cookies for the current domain. |
+| `browser_evaluate` | Run JavaScript expression | **Needs `ALLOW_CODE_EXECUTION=true`** on the daemon. Evaluates in extension world; avoid `eval()` on strict CSP pages. |
+| `browser_run_code` | 🚀 **Direct Code Execution** | **Needs `ALLOW_CODE_EXECUTION=true`** on the daemon. Write & run async JS with full DOM access, immune to website CSP restrictions. |
+| `browser_get_cookies` | 🍪 Extract active cookies | **Needs `ALLOW_COOKIE_ACCESS=true`** on the daemon. Retrieve session credentials and auth cookies for the current domain. |
 | `browser_upload_file` | 📁 File upload automation | Upload files into `<input type="file">` elements using base64 data. |
 | `browser_label_elements`| 🎯 OmniParser element labeling | Injects visual numbered badges `[1]`, `[2]` and click with `browser_click({ label: N })`. |
 | `browser_handle_dialog`| 🛑 Native dialog management | Intercepts & handles `alert`, `confirm`, `prompt`, `beforeunload` to prevent tab freezing. |
@@ -102,7 +102,11 @@ bp tunnel url
 - Always pass `tabId` when executing actions on a specific tab.
 - BrowserPilot allows users to browse or work in other tabs while you operate on background tabs without stealing active window focus.
 
-### 3. Handling Strict CSP Sites
+### 3. Disabled Capabilities
+- If a tool returns `🔒 … is disabled because …`, the daemon operator has not enabled that capability. Do not retry it or try to work around it (for example by calling another tool that runs code); report the limitation to the user instead.
+- Prefer the non-code tools in this table for normal automation — they cover navigation, DOM interaction, screenshots, downloads and clipboard without needing any opt-in flag.
+
+### 4. Handling Strict CSP Sites
 - Sites like Instagram, GitHub, and banking portals block script evaluation via Content Security Policy.
 - Always prefer `browser_click`, `browser_type`, and `browser_press_key` over `browser_evaluate`.
 

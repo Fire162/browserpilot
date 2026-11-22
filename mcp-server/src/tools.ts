@@ -1,8 +1,21 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserDispatcher } from './types.js';
+import { ActionPolicy } from './policy.js';
 
-export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) {
+/** Renders a consistent refusal for capabilities the operator has not enabled. */
+function denial(policy: ActionPolicy, action: 'run_code' | 'evaluate' | 'get_cookies') {
+  return {
+    isError: true,
+    content: [{ type: 'text' as const, text: `🔒 ${policy.denialMessage(action)}` }]
+  };
+}
+
+export function registerBrowserTools(
+  server: McpServer,
+  hub: BrowserDispatcher,
+  policy: ActionPolicy = ActionPolicy.fromEnv()
+) {
   // 1. browser_status
   server.tool(
     'browser_status',
@@ -446,6 +459,9 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       tabId: z.number().optional().describe('Target tab ID')
     },
     async ({ script, tabId }) => {
+      if (!policy.isEnabled('evaluate')) {
+        return denial(policy, 'evaluate');
+      }
       try {
         const result = await hub.dispatch('evaluate', { script, tabId }, 25000);
         return {
@@ -474,6 +490,9 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       tabId: z.number().optional().describe('Target tab ID')
     },
     async ({ code, tabId }) => {
+      if (!policy.isEnabled('run_code')) {
+        return denial(policy, 'run_code');
+      }
       try {
         const result = await hub.dispatch('run_code', { code, tabId }, 30000);
         return {
@@ -501,6 +520,9 @@ export function registerBrowserTools(server: McpServer, hub: BrowserDispatcher) 
       tabId: z.number().optional().describe('Target tab ID')
     },
     async ({ tabId }) => {
+      if (!policy.isEnabled('get_cookies')) {
+        return denial(policy, 'get_cookies');
+      }
       try {
         const result = await hub.dispatch('get_cookies', { tabId }, 15000);
         return {

@@ -1,155 +1,77 @@
-import http from 'http';
-import { URL } from 'url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import dotenv from 'dotenv';
 import { WebSocketHub } from './websocket-hub.js';
 import { registerBrowserTools } from './tools.js';
+import { loadConfig, DaemonConfig, SERVER_VERSION, USER_ENV_FILE } from './config.js';
+import { ActionPolicy, AuthRateLimiter } from './policy.js';
+import { createHttpServer } from './http-server.js';
 
 // Load environment variables
 dotenv.config();
 
-const PORT = parseInt(process.env.WS_PORT || process.env.PORT || '8770', 10);
-const SECRET_TOKEN = process.env.SECRET_TOKEN || 'browserpilot-secret';
 const RUN_STDIO = process.argv.includes('--stdio') || process.env.MCP_STDIO === 'true';
-
-// Active SSE transports mapped by sessionId
-const sseTransports = new Map<string, SSEServerTransport>();
 
 function createConfiguredMcpServer(hub: WebSocketHub): McpServer {
   const server = new McpServer({
     name: 'browserpilot-mcp',
-    version: '1.0.0'
+    version: SERVER_VERSION
   });
-  registerBrowserTools(server, hub);
+  registerBrowserTools(server, hub, hub.getPolicy());
   return server;
 }
 
+function assertStartupSafety(config: DaemonConfig): void {
+  if (!config.secretToken) {
+    throw new Error(
+      'Refusing to start without a SECRET_TOKEN. Set SECRET_TOKEN in the environment or in ' +
+        `${USER_ENV_FILE}, then restart the daemon.`
+    );
+  }
+
+  if (config.usesLegacyDefaultToken) {
+    console.error('');
+    console.error('⚠️  SECURITY: SECRET_TOKEN is set to the public default value, which is');
+    console.error('   documented in this repository and known to everyone.');
+    console.error('   Rotate it now:  delete the SECRET_TOKEN line from your environment/.env,');
+    console.error('   restart the daemon (a strong token is generated automatically), and');
+    console.error('   paste the new token into the extension popup.');
+    console.error('');
+  }
+
+  if (config.bindHost !== '127.0.0.1' && config.bindHost !== 'localhost' && config.bindHost !== '::1') {
+    console.error(
+      `ℹ️  Listening on ${config.bindHost}. Use BROWSERPILOT_BIND=127.0.0.1 when a tunnel on this ` +
+        'host is the only ingress.'
+    );
+  }
+}
+
 async function main() {
+  const config = loadConfig();
+
   console.error('====================================================');
   console.error('🚀 Starting BrowserPilot Daemon & MCP Server...');
   console.error('====================================================');
 
+  assertStartupSafety(config);
+
+  const policy = new ActionPolicy({
+    allowCodeExecution: config.allowCodeExecution,
+    allowCookieAccess: config.allowCookieAccess
+  });
+  const rateLimiter = new AuthRateLimiter(config.authMaxFailures, config.authWindowMs, config.authBlockMs);
+
   // 1. Initialize WebSocket Hub
-  const hub = new WebSocketHub(PORT, SECRET_TOKEN);
+  const hub = new WebSocketHub(config.port, config.secretToken, {
+    allowedOrigins: config.allowedOrigins,
+    policy,
+    rateLimiter
+  });
 
-  // 2. Create unified HTTP server
-  const httpServer = http.createServer(async (req, res) => {
-    // Enable CORS
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-token');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    const host = req.headers.host || `localhost:${PORT}`;
-    const parsedUrl = new URL(req.url || '/', `http://${host}`);
-
-    // Health & status endpoints
-    if (parsedUrl.pathname === '/health' || parsedUrl.pathname === '/status') {
-      const status = hub.getStatus();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify(
-          {
-            service: 'browserpilot',
-            status: 'online',
-            hub: status,
-            sseSessions: sseTransports.size
-          },
-          null,
-          2
-        )
-      );
-      return;
-    }
-
-    // Direct RPC Dispatch endpoint for stdio-bridge or HTTP clients
-    if (parsedUrl.pathname === '/api/dispatch' && req.method === 'POST') {
-      if (!hub.authenticate(req)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'Unauthorized: Invalid or missing secret token' }));
-        return;
-      }
-
-      let body = '';
-      req.on('data', (chunk) => (body += chunk));
-      req.on('end', async () => {
-        try {
-          const { action, params, timeoutMs } = JSON.parse(body || '{}');
-          const result = await hub.dispatch(action, params || {}, timeoutMs || 35000);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true, result }));
-        } catch (err: any) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: err.message }));
-        }
-      });
-      return;
-    }
-
-    // MCP SSE connection endpoint
-    if (parsedUrl.pathname === '/sse') {
-      if (!hub.authenticate(req)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unauthorized: Invalid or missing secret token' }));
-        return;
-      }
-
-      console.error('[MCP SSE] Client initiating SSE connection...');
-      const sseTransport = new SSEServerTransport('/message', res);
-      sseTransports.set(sseTransport.sessionId, sseTransport);
-
-      const mcpServer = createConfiguredMcpServer(hub);
-      await mcpServer.connect(sseTransport);
-
-      req.on('close', () => {
-        console.error(`[MCP SSE] Session ${sseTransport.sessionId} closed.`);
-        sseTransports.delete(sseTransport.sessionId);
-      });
-      return;
-    }
-
-    // MCP POST message endpoint
-    if (parsedUrl.pathname === '/message' && req.method === 'POST') {
-      if (!hub.authenticate(req)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unauthorized: Invalid or missing secret token' }));
-        return;
-      }
-
-      const sessionId = parsedUrl.searchParams.get('sessionId');
-      if (!sessionId || !sseTransports.has(sessionId)) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'SSE session not found or expired' }));
-        return;
-      }
-
-      const transport = sseTransports.get(sessionId)!;
-      await transport.handlePostMessage(req, res);
-      return;
-    }
-
-    // Default root welcome
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify(
-        {
-          name: 'BrowserPilot MCP Server',
-          version: '1.0.0',
-          wsEndpoint: `ws://<your-vps-ip>:${PORT}`,
-          sseEndpoint: `http://<your-vps-ip>:${PORT}/sse`,
-          status: hub.getStatus()
-        },
-        null,
-        2
-      )
-    );
+  // 2. Create unified HTTP server (origin checks, auth, body caps, no crashes)
+  const httpServer = createHttpServer(hub, config, () => createConfiguredMcpServer(hub), {
+    limiter: rateLimiter
   });
 
   // Attach WebSocket Server to the same HTTP server
@@ -164,12 +86,21 @@ async function main() {
   }
 
   // 4. Start HTTP & WebSocket Server
-  await new Promise<void>((resolve) => {
-    httpServer.listen(PORT, '0.0.0.0', () => {
-      console.error(`✅ BrowserPilot listening on http://0.0.0.0:${PORT}`);
-      console.error(`📡 WebSocket endpoint for Chrome Extension: ws://<your-vps-ip>:${PORT}`);
-      console.error(`🔌 MCP SSE endpoint: http://<your-vps-ip>:${PORT}/sse`);
-      console.error(`🔑 Secret Token: ${SECRET_TOKEN}`);
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(config.port, config.bindHost, () => {
+      httpServer.removeListener('error', reject);
+      console.error(`✅ BrowserPilot listening on http://${config.bindHost}:${config.port}`);
+      console.error(`📡 WebSocket endpoint for Chrome Extension: ws://<your-vps-ip>:${config.port}`);
+      console.error(`🔌 MCP SSE endpoint: http://<your-vps-ip>:${config.port}/sse`);
+      console.error(
+        `🔑 Secret Token: ${config.secretToken.slice(0, 6)}… (${config.tokenSource === 'generated' ? `generated, saved to ${USER_ENV_FILE}` : `source: ${config.tokenSource}`})`
+      );
+      console.error(`   Run 'bp status' or read ${USER_ENV_FILE} to view the full token.`);
+      console.error(
+        `🧰 Dangerous tools: code execution ${config.allowCodeExecution ? 'ENABLED' : 'disabled'}, ` +
+          `cookie export ${config.allowCookieAccess ? 'ENABLED' : 'disabled'}`
+      );
       console.error('====================================================');
       resolve();
     });
